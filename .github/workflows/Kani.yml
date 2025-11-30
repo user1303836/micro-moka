@@ -16,7 +16,7 @@ jobs:
   run-kani:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Moka
+      - name: Checkout Micro Moka
         uses: actions/checkout@v4
 
       - name: Show CPU into

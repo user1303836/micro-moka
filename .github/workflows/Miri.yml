@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Mini Moka
+      - name: Checkout Micro Moka
         uses: actions/checkout@v4
 
       - name: Install Rust nightly toolchain with Miri

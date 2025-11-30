@@ -1,17 +1,15 @@
-use super::{KeyDate, KeyHashDate, ValueEntry};
+use super::{KeyHashDate, ValueEntry};
 use crate::common::{
     deque::{DeqNode, Deque},
     CacheRegion,
 };
 
-use std::ptr::NonNull;
 use tagptr::TagNonNull;
 
 pub(crate) struct Deques<K> {
     pub(crate) window: Deque<KeyHashDate<K>>, //    Not used yet.
     pub(crate) probation: Deque<KeyHashDate<K>>,
     pub(crate) protected: Deque<KeyHashDate<K>>, // Not used yet.
-    pub(crate) write_order: Deque<KeyDate<K>>,
 }
 
 impl<K> Default for Deques<K> {
@@ -20,7 +18,6 @@ impl<K> Default for Deques<K> {
             window: Deque::new(CacheRegion::Window),
             probation: Deque::new(CacheRegion::MainProbation),
             protected: Deque::new(CacheRegion::MainProtected),
-            write_order: Deque::new(CacheRegion::Other),
         }
     }
 }
@@ -30,7 +27,6 @@ impl<K> Deques<K> {
         self.window = Deque::new(CacheRegion::Window);
         self.probation = Deque::new(CacheRegion::MainProbation);
         self.protected = Deque::new(CacheRegion::MainProtected);
-        self.write_order = Deque::new(CacheRegion::Other);
     }
 
     pub(crate) fn push_back_ao<V>(
@@ -48,12 +44,6 @@ impl<K> Deques<K> {
         };
         let tagged_node = TagNonNull::compose(node, region as usize);
         entry.set_access_order_q_node(Some(tagged_node));
-    }
-
-    pub(crate) fn push_back_wo<V>(&mut self, kh: KeyDate<K>, entry: &mut ValueEntry<K, V>) {
-        let node = Box::new(DeqNode::new(kh));
-        let node = self.write_order.push_back(node);
-        entry.set_write_order_q_node(Some(node));
     }
 
     pub(crate) fn move_to_back_ao<V>(&mut self, entry: &ValueEntry<K, V>) {
@@ -75,14 +65,6 @@ impl<K> Deques<K> {
         }
     }
 
-    pub(crate) fn move_to_back_wo<V>(&mut self, entry: &ValueEntry<K, V>) {
-        let node = entry.write_order_q_node().unwrap();
-        let p = unsafe { node.as_ref() };
-        if self.write_order.contains(p) {
-            unsafe { self.write_order.move_to_back(node) };
-        }
-    }
-
     pub(crate) fn unlink_ao<V>(&mut self, entry: &mut ValueEntry<K, V>) {
         if let Some(node) = entry.take_access_order_q_node() {
             self.unlink_node_ao(node);
@@ -96,12 +78,6 @@ impl<K> Deques<K> {
     ) {
         if let Some(node) = entry.take_access_order_q_node() {
             unsafe { Self::unlink_node_ao_from_deque(deq_name, deq, node) };
-        }
-    }
-
-    pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyDate<K>>, entry: &mut ValueEntry<K, V>) {
-        if let Some(node) = entry.take_write_order_q_node() {
-            Self::unlink_node_wo(deq, node);
         }
     }
 
@@ -137,21 +113,6 @@ impl<K> Deques<K> {
                 deq_name,
                 node.as_ref()
             )
-        }
-    }
-
-    pub(crate) fn unlink_node_wo(deq: &mut Deque<KeyDate<K>>, node: NonNull<DeqNode<KeyDate<K>>>) {
-        unsafe {
-            let p = node.as_ref();
-            if deq.contains(p) {
-                // https://github.com/moka-rs/moka/issues/64
-                deq.unlink_and_drop(node);
-            } else {
-                panic!(
-                    "unlink_node - node is not a member of write_order deque. {:?}",
-                    p
-                )
-            }
         }
     }
 }

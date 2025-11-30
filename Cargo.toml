@@ -1,36 +1,26 @@
 [package]
-name = "mini-moka"
-version = "0.11.0"
+name = "micro-moka"
+version = "0.1.0"
 edition = "2018"
 rust-version = "1.76"
 
-description = "A lighter edition of Moka, a fast and concurrent cache library"
+description = "A lightweight, single-threaded cache library with W-TinyLFU eviction"
 license = "MIT OR Apache-2.0"
 # homepage = "https://"
-documentation = "https://docs.rs/mini-moka/"
-repository = "https://github.com/moka-rs/mini-moka"
-keywords = ["cache", "concurrent"]
-categories = ["caching", "concurrency"]
+documentation = "https://docs.rs/micro-moka/"
+repository = "https://github.com/moka-rs/micro-moka"
+keywords = ["cache"]
+categories = ["caching"]
 readme = "README.md"
 exclude = [".circleci", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 
-[features]
-default = ["sync"]
-
-sync = ["dashmap"]
-
 [dependencies]
-crossbeam-channel = "0.5.5"
-crossbeam-utils = "0.8"
 smallvec = "1.8"
 tagptr = "0.2"
 
 # Opt-out serde and stable_deref_trait features
 # https://github.com/Manishearth/triomphe/pull/5
 triomphe = { version = "0.1.13", default-features = false }
-
-# Optional dependencies (enabled by default)
-dashmap = { version = "6.1", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.19"

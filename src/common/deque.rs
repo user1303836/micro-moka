@@ -209,12 +209,6 @@ impl<T> Deque<T> {
         }
     }
 
-    pub(crate) fn move_front_to_back(&mut self) {
-        if let Some(node) = self.head {
-            unsafe { self.move_to_back(node) };
-        }
-    }
-
     /// Unlinks the specified node from the current list.
     ///
     /// This method takes care not to create mutable references to `element`, to
@@ -734,11 +728,8 @@ mod tests {
         unsafe { deque.move_to_back(node3a) };
         // "b" -> "a" -> "c"
 
-        deque.move_front_to_back();
-        // "a" -> "c" -> "b"
-
         let node1b = deque.peek_front().unwrap();
-        assert_eq!(node1b.element, "a".to_string());
+        assert_eq!(node1b.element, "b".to_string());
     }
 
     #[test]

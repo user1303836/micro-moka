@@ -21,7 +21,7 @@ jobs:
             rustflags: '--cfg beta_clippy'
 
     steps:
-      - name: Checkout Mini Moka
+      - name: Checkout Micro Moka
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain

@@ -34,7 +34,7 @@ jobs:
             rust-version: stable
 
     steps:
-      - name: Checkout Mini Moka
+      - name: Checkout Micro Moka
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
@@ -48,14 +48,13 @@ jobs:
         with:
           tool: cross
 
-      - name: Remove integration tests and force enable rustc_version crate
+      - name: Remove integration tests
         run: |
           rm -rf tests
-          sed -i '/actix-rt\|async-std\|reqwest/d' Cargo.toml
 
       - run: cargo clean
 
-      - name: Run tests (sync feature)
+      - name: Run tests
         run: |
-          cross ${{ matrix.platform.carge-version }} test --release -F sync \
+          cross ${{ matrix.platform.carge-version }} test --release \
             --target ${{ matrix.platform.target }}

@@ -1,12 +1,7 @@
 use std::convert::TryInto;
 
-#[cfg(feature = "sync")]
-pub(crate) mod concurrent;
-
-pub(crate) mod builder_utils;
 pub(crate) mod deque;
 pub(crate) mod frequency_sketch;
-pub(crate) mod time;
 
 // Note: `CacheRegion` cannot have more than four enum variants. This is because
 // `crate::{sync,unsync}::DeqNodes` uses a `tagptr::TagNonNull<DeqNode<T>, 2>`
