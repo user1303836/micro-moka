@@ -24,10 +24,10 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 
 <!-- [fossa-badge]: https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmini-moka.svg?type=shield -->
 
-[gh-actions]: https://github.com/moka-rs/micro-moka/actions?query=workflow%3ACI
+[gh-actions]: https://github.com/user1303836/micro-moka/actions?query=workflow%3ACI
 [crate]: https://crates.io/crates/micro-moka
 [docs]: https://docs.rs/micro-moka
-[deps-rs]: https://deps.rs/repo/github/moka-rs/micro-moka
+[deps-rs]: https://deps.rs/repo/github/user1303836/micro-moka
 [moka-git]: https://github.com/moka-rs/moka
 [mini-moka-git]: https://github.com/moka-rs/mini-moka
 [caffeine-git]: https://github.com/ben-manes/caffeine
