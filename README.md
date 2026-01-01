@@ -12,10 +12,10 @@ Micro Moka is a lightweight, single-threaded cache library for Rust. It is a spe
 
 Micro Moka provides a non-thread-safe cache implementation for single thread applications. All caches perform a best-effort bounding of a hash map using an entry replacement algorithm to determine which entries to evict when the capacity is exceeded.
 
-[gh-actions-badge]: ./assets/build.svg
-[release-badge]: ./assets/version.svg
-[docs-badge]: ./assets/docs.svg
-[license-badge]: ./assets/license.svg
+[gh-actions-badge]: https://github.com/user1303836/micro-moka/actions/workflows/CI.yml/badge.svg
+[release-badge]: https://img.shields.io/crates/v/micro-moka.svg
+[docs-badge]: https://docs.rs/micro-moka/badge.svg
+[license-badge]: https://img.shields.io/crates/l/micro-moka.svg
 
 <!-- [fossa-badge]: https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmini-moka.svg?type=shield -->
 
