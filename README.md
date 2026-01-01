@@ -8,14 +8,9 @@
 
 [![license][license-badge]](#license)
 
-Micro Moka is a lightweight, single-threaded cache library for Rust. It is a fork of
-[Mini Moka][mini-moka-git], stripped down to the bare essentials while keeping the
-W-TinyLFU eviction policy.
+Micro Moka is a lightweight, single-threaded cache library for Rust. It is a specialized fork of [Mini Moka][mini-moka-git], engineered for use cases where binary size, compile times, and simplicity are paramount, while maintaining the high hit-ratio of the W-TinyLFU eviction policy.
 
-Micro Moka provides a non-thread-safe cache implementation for single thread applications.
-
-All caches perform a best-effort bounding of a hash map using an entry replacement
-algorithm to determine which entries to evict when the capacity is exceeded.
+Micro Moka provides a non-thread-safe cache implementation for single thread applications. All caches perform a best-effort bounding of a hash map using an entry replacement algorithm to determine which entries to evict when the capacity is exceeded.
 
 [gh-actions-badge]: ./assets/build.svg
 [release-badge]: ./assets/version.svg
@@ -32,14 +27,12 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 [mini-moka-git]: https://github.com/moka-rs/mini-moka
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
-## Features
+## Key Features
 
-- A cache can be bounded by the maximum number of entries.
-- Maintains near optimal hit ratio by using an entry replacement algorithms inspired
-  by Caffeine:
-  - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
-  - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
-  - [More details and some benchmark results are available here][tiny-lfu].
+- **Minimal Footprint:** Stripped of all async, concurrent, and heavy logic. Ideal for CLIs, WASM, and environments where binary size matters.
+- **Tiny Dependency Tree:** Minimal dependencies (`smallvec`, `tagptr`, `triomphe`). No `parking_lot` or async runtimes.
+- **Smart Eviction:** Uses W-TinyLFU (LFU admission + LRU eviction) to maintain a near-optimal hit ratio, significantly outperforming standard LRU caches.
+- **Bounded Capacity:** Caches are strictly bounded by a maximum number of entries.
 
 <!--
 Mini Moka provides a rich and flexible feature set while maintaining high hit ratio
@@ -56,7 +49,7 @@ to take a look at the [Quick Cache][quick-cache] crate.
 
 ## Change Log
 
-- [CHANGELOG.md](https://github.com/moka-rs/mini-moka/blob/main/CHANGELOG.md)
+- [CHANGELOG.md](./CHANGELOG.md)
 
 ## Table of Contents
 
