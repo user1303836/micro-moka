@@ -14,6 +14,7 @@ on:
   schedule:
     # Run against the last commit on the default branch on Friday at 8pm (UTC?)
     - cron: '0 20 * * 5'
+  workflow_dispatch:
 
 jobs:
   test:
