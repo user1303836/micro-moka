@@ -46,7 +46,11 @@ jobs:
         run: cargo tree
 
       - name: Run tests (debug)
-        run: cargo test
+        run: cargo test --all-features
+        env:
+          RUSTFLAGS: '--cfg trybuild'
 
       - name: Run tests (release)
-        run: cargo test --release
+        run: cargo test --release --all-features
+        env:
+          RUSTFLAGS: '--cfg trybuild'
