@@ -117,7 +117,6 @@ impl<T> Deque<T> {
         fast
     }
 
-    #[cfg(any(test, debug_assertions))]
     fn reachable_from_head(&self, target: &DeqNode<T>) -> bool {
         let mut current = self.head;
         let mut steps = 0;
@@ -764,20 +763,45 @@ mod tests {
     }
 
     #[test]
-    fn contains_rejects_node_from_different_deque() {
+    fn reachable_from_head_rejects_foreign_non_head_node() {
         let mut deque_a: Deque<String> = Deque::new(MainProbation);
         let mut deque_b: Deque<String> = Deque::new(MainProbation);
 
-        let node1 = DeqNode::new("x".to_string());
-        let node1_ptr = deque_a.push_back(Box::new(node1));
-        let node2 = DeqNode::new("y".to_string());
-        let _node2_ptr = deque_b.push_back(Box::new(node2));
+        deque_a.push_back(Box::new(DeqNode::new("a1".into())));
+        deque_a.push_back(Box::new(DeqNode::new("a2".into())));
 
-        // node1 is in deque_a, not deque_b
-        let node1_ref = unsafe { node1_ptr.as_ref() };
-        assert!(deque_a.contains(node1_ref));
-        // The node has prev=None and is not deque_b's head, so fast-path returns false
-        assert!(!deque_b.contains(node1_ref));
+        deque_b.push_back(Box::new(DeqNode::new("b1".into())));
+        let node_b2_ptr = deque_b.push_back(Box::new(DeqNode::new("b2".into())));
+
+        // node_b2 is a non-head node (prev.is_some()) in deque_b.
+        // The fast-path check (prev.is_some() || is_head) would return true
+        // even for deque_a. The traversal correctly rejects it.
+        let node_b2_ref = unsafe { node_b2_ptr.as_ref() };
+        assert!(node_b2_ref.prev.is_some());
+        assert!(!deque_a.reachable_from_head(node_b2_ref));
+        assert!(deque_b.reachable_from_head(node_b2_ref));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn contains_panics_on_foreign_non_head_node() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let mut deque_a: Deque<String> = Deque::new(MainProbation);
+        let mut deque_b: Deque<String> = Deque::new(MainProbation);
+
+        deque_a.push_back(Box::new(DeqNode::new("a1".into())));
+        deque_a.push_back(Box::new(DeqNode::new("a2".into())));
+
+        deque_b.push_back(Box::new(DeqNode::new("b1".into())));
+        let node_b2_ptr = deque_b.push_back(Box::new(DeqNode::new("b2".into())));
+
+        let node_b2_ref = unsafe { node_b2_ptr.as_ref() };
+        assert!(node_b2_ref.prev.is_some());
+
+        // In debug builds, contains() catches the false-positive via debug_assert
+        let result = catch_unwind(AssertUnwindSafe(|| deque_a.contains(node_b2_ref)));
+        assert!(result.is_err());
     }
 
     #[test]
