@@ -24,10 +24,7 @@ pub(crate) struct KeyHashDate<K> {
 
 impl<K> KeyHashDate<K> {
     pub(crate) fn new(key: Rc<K>, hash: u64) -> Self {
-        Self {
-            key,
-            hash,
-        }
+        Self { key, hash }
     }
 }
 

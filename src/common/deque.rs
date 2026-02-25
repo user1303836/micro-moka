@@ -109,7 +109,30 @@ impl<T> Deque<T> {
     }
 
     pub(crate) fn contains(&self, node: &DeqNode<T>) -> bool {
-        node.prev.is_some() || self.is_head(node)
+        let fast = node.prev.is_some() || self.is_head(node);
+        debug_assert!(
+            !fast || self.reachable_from_head(node),
+            "Deque::contains fast-path returned true but node is not reachable from head"
+        );
+        fast
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn reachable_from_head(&self, target: &DeqNode<T>) -> bool {
+        let mut current = self.head;
+        let mut steps = 0;
+        while let Some(ptr) = current {
+            let node = unsafe { ptr.as_ref() };
+            if std::ptr::eq(node, target) {
+                return true;
+            }
+            current = node.next;
+            steps += 1;
+            if steps > self.len {
+                break;
+            }
+        }
+        false
     }
 
     pub(crate) fn peek_front(&self) -> Option<&DeqNode<T>> {
@@ -173,6 +196,10 @@ impl<T> Deque<T> {
     }
 
     pub(crate) unsafe fn move_to_back(&mut self, mut node: NonNull<DeqNode<T>>) {
+        debug_assert!(
+            self.contains(node.as_ref()),
+            "move_to_back called with a node not in this deque"
+        );
         if self.is_tail(node.as_ref()) {
             // Already at the tail. Nothing to do.
             return;
@@ -218,6 +245,10 @@ impl<T> Deque<T> {
     /// needed, use `unlink_and_drop` instead, or drop it at the caller side.
     /// Otherwise, the node will leak.
     pub(crate) unsafe fn unlink(&mut self, mut node: NonNull<DeqNode<T>>) {
+        debug_assert!(
+            self.contains(node.as_ref()),
+            "unlink called with a node not in this deque"
+        );
         if self.is_at_cursor(node.as_ref()) {
             self.advance_cursor();
         }
@@ -730,6 +761,42 @@ mod tests {
 
         let node1b = deque.peek_front().unwrap();
         assert_eq!(node1b.element, "b".to_string());
+    }
+
+    #[test]
+    fn contains_rejects_node_from_different_deque() {
+        let mut deque_a: Deque<String> = Deque::new(MainProbation);
+        let mut deque_b: Deque<String> = Deque::new(MainProbation);
+
+        let node1 = DeqNode::new("x".to_string());
+        let node1_ptr = deque_a.push_back(Box::new(node1));
+        let node2 = DeqNode::new("y".to_string());
+        let _node2_ptr = deque_b.push_back(Box::new(node2));
+
+        // node1 is in deque_a, not deque_b
+        let node1_ref = unsafe { node1_ptr.as_ref() };
+        assert!(deque_a.contains(node1_ref));
+        // The node has prev=None and is not deque_b's head, so fast-path returns false
+        assert!(!deque_b.contains(node1_ref));
+    }
+
+    #[test]
+    fn contains_rejects_unlinked_node() {
+        let mut deque: Deque<String> = Deque::new(MainProbation);
+
+        let node1 = DeqNode::new("a".to_string());
+        let node1_ptr = deque.push_back(Box::new(node1));
+        let node2 = DeqNode::new("b".to_string());
+        let node2_ptr = deque.push_back(Box::new(node2));
+
+        unsafe { deque.unlink(node2_ptr) };
+
+        let node2_ref = unsafe { node2_ptr.as_ref() };
+        assert!(!deque.contains(node2_ref));
+
+        // Clean up
+        assert!(deque.contains(unsafe { node1_ptr.as_ref() }));
+        unsafe { std::mem::drop(Box::from_raw(node2_ptr.as_ptr())) };
     }
 
     #[test]

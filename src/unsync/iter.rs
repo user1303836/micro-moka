@@ -1,9 +1,6 @@
 use super::{Cache, ValueEntry};
 
-use std::{
-    hash::Hash,
-    rc::Rc,
-};
+use std::{hash::Hash, rc::Rc};
 
 type HashMapIter<'i, K, V> = std::collections::hash_map::Iter<'i, Rc<K>, ValueEntry<K, V>>;
 
@@ -12,7 +9,10 @@ pub struct Iter<'i, K, V> {
 }
 
 impl<'i, K, V> Iter<'i, K, V> {
-    pub(crate) fn new(_cache: &'i Cache<K, V, impl std::hash::BuildHasher>, iter: HashMapIter<'i, K, V>) -> Self {
+    pub(crate) fn new(
+        _cache: &'i Cache<K, V, impl std::hash::BuildHasher>,
+        iter: HashMapIter<'i, K, V>,
+    ) -> Self {
         Self { iter }
     }
 }
