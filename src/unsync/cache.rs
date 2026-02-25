@@ -1,13 +1,6 @@
-use super::{
-    deques::Deques, CacheBuilder, Iter, KeyHashDate, ValueEntry,
-};
+use super::{deques::Deques, CacheBuilder, Iter, KeyHashDate, ValueEntry};
 use crate::{
-    common::{
-        self,
-        deque::{DeqNode},
-        frequency_sketch::FrequencySketch,
-        CacheRegion,
-    },
+    common::{self, deque::DeqNode, frequency_sketch::FrequencySketch, CacheRegion},
     Policy,
 };
 
@@ -285,6 +278,7 @@ where
 
         if let Some(mut entry) = self.cache.remove(key) {
             self.deques.unlink_ao(&mut entry);
+            self.entry_count -= 1;
         }
     }
 
@@ -301,6 +295,7 @@ where
 
         if let Some(mut entry) = self.cache.remove(key) {
             self.deques.unlink_ao(&mut entry);
+            self.entry_count -= 1;
             Some(entry.value)
         } else {
             None
@@ -313,9 +308,16 @@ where
     /// popularity estimator of keys so that it retains the client activities of
     /// trying to retrieve an item.
     pub fn invalidate_all(&mut self) {
-        self.cache.clear();
+        // Swap out the cache before resetting internal state so that a panic
+        // in V::drop leaves `self` in a consistent (empty) state rather than
+        // with stale deque pointers or a stale entry_count.
+        let old_cache = std::mem::replace(
+            &mut self.cache,
+            HashMap::with_hasher(self.build_hasher.clone()),
+        );
         self.deques.clear();
         self.entry_count = 0;
+        drop(old_cache);
     }
 
     /// Discards cached values that satisfy a predicate.
@@ -452,12 +454,7 @@ where
     }
 
     #[inline]
-    fn handle_insert(
-        &mut self,
-        key: Rc<K>,
-        hash: u64,
-        policy_weight: u32,
-    ) {
+    fn handle_insert(&mut self, key: Rc<K>, hash: u64, policy_weight: u32) {
         let has_free_space = self.has_enough_capacity(policy_weight, self.entry_count);
         let (cache, deqs, freq) = (&mut self.cache, &mut self.deques, &self.frequency_sketch);
 
@@ -492,9 +489,7 @@ where
         candidate.add_frequency(freq, hash);
 
         match Self::admit(&candidate, cache, deqs, freq) {
-            AdmissionResult::Admitted {
-                victim_nodes,
-            } => {
+            AdmissionResult::Admitted { victim_nodes } => {
                 // Remove the victims from the cache (hash map) and deque.
                 for victim in victim_nodes {
                     // Remove the victim from the hash map.
@@ -588,20 +583,13 @@ where
         // See Caffeine's implementation.
 
         if victims.weight >= candidate.weight && candidate.freq > victims.freq {
-            AdmissionResult::Admitted {
-                victim_nodes,
-            }
+            AdmissionResult::Admitted { victim_nodes }
         } else {
             AdmissionResult::Rejected
         }
     }
 
-    fn handle_update(
-        &mut self,
-        key: Rc<K>,
-        policy_weight: u32,
-        old_entry: ValueEntry<K, V>,
-    ) {
+    fn handle_update(&mut self, key: Rc<K>, policy_weight: u32, old_entry: ValueEntry<K, V>) {
         let entry = self.cache.get_mut(&key).unwrap();
         entry.replace_deq_nodes_with(old_entry);
         entry.set_policy_weight(policy_weight);
@@ -623,8 +611,7 @@ where
 
         {
             let deqs = &mut self.deques;
-            let (probation, cache) =
-                (&mut deqs.probation, &mut self.cache);
+            let (probation, cache) = (&mut deqs.probation, &mut self.cache);
 
             for _ in 0..EVICTION_BATCH_SIZE {
                 if evicted_policy_weight >= weights_to_evict {
@@ -883,6 +870,141 @@ mod tests {
                 ensure_sketch_len(u64::MAX, pot30, "u64::MAX");
             }
         };
+    }
+
+    #[test]
+    fn remove_decrements_entry_count() {
+        let mut cache = Cache::new(3);
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.entry_count(), 2);
+
+        let removed = cache.remove(&"a");
+        assert_eq!(removed, Some("alice"));
+        assert_eq!(cache.entry_count(), 1);
+
+        cache.remove(&"nonexistent");
+        assert_eq!(cache.entry_count(), 1);
+
+        cache.remove(&"b");
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[test]
+    fn invalidate_decrements_entry_count() {
+        let mut cache = Cache::new(3);
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.entry_count(), 2);
+
+        cache.invalidate(&"a");
+        assert_eq!(cache.entry_count(), 1);
+
+        cache.invalidate(&"nonexistent");
+        assert_eq!(cache.entry_count(), 1);
+
+        cache.invalidate(&"b");
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[test]
+    fn insert_after_remove_on_full_cache() {
+        let mut cache = Cache::new(2);
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.entry_count(), 2);
+
+        cache.remove(&"a");
+        assert_eq!(cache.entry_count(), 1);
+
+        cache.insert("c", "cindy");
+        assert_eq!(cache.entry_count(), 2);
+        assert_eq!(cache.get(&"c"), Some(&"cindy"));
+        assert_eq!(cache.get(&"b"), Some(&"bob"));
+        assert_eq!(cache.get(&"a"), None);
+    }
+
+    #[test]
+    fn insert_after_invalidate_on_full_cache() {
+        let mut cache = Cache::new(2);
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.entry_count(), 2);
+
+        cache.invalidate(&"a");
+        assert_eq!(cache.entry_count(), 1);
+
+        cache.insert("c", "cindy");
+        assert_eq!(cache.entry_count(), 2);
+        assert_eq!(cache.get(&"c"), Some(&"cindy"));
+        assert_eq!(cache.get(&"b"), Some(&"bob"));
+        assert_eq!(cache.get(&"a"), None);
+    }
+
+    #[test]
+    fn invalidate_all_panic_safety() {
+        use std::panic::catch_unwind;
+        use std::panic::AssertUnwindSafe;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        struct PanicOnDrop {
+            id: u32,
+            should_panic: bool,
+        }
+
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+                if self.should_panic {
+                    panic!("intentional panic in drop for id={}", self.id);
+                }
+            }
+        }
+
+        DROP_COUNT.store(0, Ordering::Relaxed);
+        let mut cache = Cache::new(10);
+        cache.insert(
+            1,
+            PanicOnDrop {
+                id: 1,
+                should_panic: false,
+            },
+        );
+        cache.insert(
+            2,
+            PanicOnDrop {
+                id: 2,
+                should_panic: true,
+            },
+        );
+        cache.insert(
+            3,
+            PanicOnDrop {
+                id: 3,
+                should_panic: false,
+            },
+        );
+        assert_eq!(cache.entry_count(), 3);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            cache.invalidate_all();
+        }));
+        assert!(result.is_err());
+
+        assert_eq!(cache.entry_count(), 0);
+        assert_eq!(cache.cache.len(), 0);
+
+        cache.insert(
+            4,
+            PanicOnDrop {
+                id: 4,
+                should_panic: false,
+            },
+        );
+        assert_eq!(cache.entry_count(), 1);
+        assert!(cache.contains_key(&4));
     }
 
     #[test]
