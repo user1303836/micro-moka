@@ -311,9 +311,10 @@ where
         // Swap out the cache before resetting internal state so that a panic
         // in V::drop leaves `self` in a consistent (empty) state rather than
         // with stale deque pointers or a stale entry_count.
+        let old_capacity = self.cache.capacity();
         let old_cache = std::mem::replace(
             &mut self.cache,
-            HashMap::with_hasher(self.build_hasher.clone()),
+            HashMap::with_capacity_and_hasher(old_capacity, self.build_hasher.clone()),
         );
         self.deques.clear();
         self.entry_count = 0;
