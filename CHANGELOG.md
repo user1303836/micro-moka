@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-02-25
+
+### Fixed
+- Fixed `unsync::Cache::remove` and `unsync::Cache::invalidate` so they decrement `entry_count`, preventing stale capacity tracking and incorrect admission/rejection after manual removals.
+- Hardened deque membership checks in debug builds to catch wrong-deque / stale-node misuse around unsafe pointer operations, and added regression tests for the false-positive case.
+- Made `unsync::Cache::invalidate_all` panic-safer by resetting internal state before dropping the old map, so a panicking `Drop` leaves the cache in a consistent empty state.
+
 ## [0.1.0] - 2025-11-29
 
 ### Added
