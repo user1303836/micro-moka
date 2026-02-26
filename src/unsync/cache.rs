@@ -308,16 +308,21 @@ where
     /// popularity estimator of keys so that it retains the client activities of
     /// trying to retrieve an item.
     pub fn invalidate_all(&mut self) {
-        // Swap out the cache before resetting internal state so that a panic
-        // in V::drop leaves `self` in a consistent (empty) state rather than
-        // with stale deque pointers or a stale entry_count.
+        // Phase 1: swap out the cache before resetting internal state so that
+        // a panic in V::drop leaves `self` in a consistent (empty) state.
+        let old_capacity = self.cache.capacity();
         let old_cache = std::mem::replace(
             &mut self.cache,
             HashMap::with_hasher(self.build_hasher.clone()),
         );
         self.deques.clear();
         self.entry_count = 0;
+
+        // If V::drop panics, `self` is already in a valid empty state.
         drop(old_cache);
+
+        // Phase 2: best effort capacity restoration for future inserts.
+        let _ = self.cache.try_reserve(old_capacity);
     }
 
     /// Discards cached values that satisfy a predicate.
