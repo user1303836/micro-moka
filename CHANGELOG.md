@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-02-27
+
+### Fixed
+
+- Fixed release publish automation to avoid crates.io API pre-checks that can return 403 under data-access policy enforcement.
+- Made publish step idempotent by treating "already uploaded" responses from `cargo publish` as success.
+
 ## [0.1.5] - 2026-02-27
 
 ### Added
