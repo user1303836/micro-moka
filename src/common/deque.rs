@@ -46,6 +46,7 @@ impl<T> DeqNode<T> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn next_node_ptr(this: NonNull<Self>) -> Option<NonNull<DeqNode<T>>> {
         unsafe { this.as_ref() }.next
     }
