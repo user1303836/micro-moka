@@ -32,4 +32,4 @@ Every PR targeting `main` must:
 4. Ensures git tag `v<version>` exists.
 5. Creates a GitHub release from the matching changelog section.
 
-The publish workflow is idempotent: re-runs will skip publishing if crates.io already has that version.
+The publish workflow is idempotent: re-runs treat "already uploaded" from `cargo publish` as success.
