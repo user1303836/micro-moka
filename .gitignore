@@ -3,6 +3,13 @@
 .DS_Store
 /target/
 Cargo.lock
+node_modules/
+.super-ralph/
+bun.lock
+package.json
+CLAUDE.md
+OPTIMIZATION_RESEARCH.md
+PROMPT.md
 
 # intellij cache
 .idea
