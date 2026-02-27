@@ -61,6 +61,7 @@ to take a look at the [Quick Cache][quick-cache] crate.
   - [Example: Basic Usage](#example-basic-usage)
   - [Minimum Supported Rust Versions](#minimum-supported-rust-versions)
   - [Developing Micro Moka](#developing-micro-moka)
+  - [Releasing](#releasing)
   - [Credits](#credits)
     - [Caffeine](#caffeine)
   - [License](#license)
@@ -129,6 +130,14 @@ $ RUSTFLAGS='--cfg trybuild' cargo test --all-features
 $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' \
     doc --no-deps
 ```
+
+## Releasing
+
+Releases are automated from merges into `main`.
+
+- See [RELEASING.md](./RELEASING.md) for one-time setup.
+- Every PR to `main` must bump `Cargo.toml` version and add the matching changelog section.
+- On merge, GitHub Actions publishes to crates.io, creates `v<version>` tag, and creates a GitHub release.
 
 ## Credits
 
