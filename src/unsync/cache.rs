@@ -4,7 +4,6 @@ use crate::{
     Policy,
 };
 
-use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, HashMap},
@@ -224,7 +223,6 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.evict_lru_entries();
         self.cache.contains_key(key)
     }
 
@@ -237,7 +235,6 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.evict_lru_entries();
         self.frequency_sketch.increment(self.hash(key));
 
         if let Some(entry) = self.cache.get_mut(key) {
@@ -460,6 +457,7 @@ where
 
     #[inline]
     fn handle_insert(&mut self, key: Rc<K>, hash: u64, policy_weight: u32) {
+        debug_assert_eq!(policy_weight, 1);
         let has_free_space = self.has_enough_capacity(policy_weight, self.entry_count);
         let (cache, deqs, freq) = (&mut self.cache, &mut self.deques, &self.frequency_sketch);
 
@@ -490,22 +488,16 @@ where
             }
         }
 
-        let mut candidate = EntrySizeAndFrequency::new(policy_weight as u64);
-        candidate.add_frequency(freq, hash);
+        let candidate_freq = freq.frequency(hash);
 
-        match Self::admit(&candidate, cache, deqs, freq) {
-            AdmissionResult::Admitted { victim_nodes } => {
-                // Remove the victims from the cache (hash map) and deque.
-                for victim in victim_nodes {
-                    // Remove the victim from the hash map.
-                    let mut vic_entry = cache
-                        .remove(unsafe { &victim.as_ref().element.key })
-                        .expect("Cannot remove a victim from the hash map");
-                    // And then remove the victim from the deques.
-                    deqs.unlink_ao(&mut vic_entry);
-                    // Deques::unlink_wo(&mut deqs.write_order, &mut vic_entry);
-                    self.entry_count -= 1;
-                }
+        match Self::admit(candidate_freq, deqs, freq) {
+            AdmissionResult::Admitted { victim_node } => {
+                // Remove the victim from the hash map and deque.
+                let mut vic_entry = cache
+                    .remove(unsafe { &victim_node.as_ref().element.key })
+                    .expect("Cannot remove a victim from the hash map");
+                deqs.unlink_ao(&mut vic_entry);
+                self.entry_count -= 1;
 
                 // Add the candidate to the deque.
                 let entry = cache.get_mut(&key).unwrap();
@@ -531,64 +523,28 @@ where
         }
     }
 
-    /// Performs size-aware admission explained in the paper:
+    /// Performs admission explained in the paper:
     /// [Lightweight Robust Size Aware Cache Management][size-aware-cache-paper]
     /// by Gil Einziger, Ohad Eytan, Roy Friedman, Ben Manes.
     ///
     /// [size-aware-cache-paper]: https://arxiv.org/abs/2105.08770
     ///
-    /// There are some modifications in this implementation:
-    /// - To admit to the main space, candidate's frequency must be higher than
-    ///   the aggregated frequencies of the potential victims. (In the paper,
-    ///   `>=` operator is used rather than `>`)  The `>` operator will do a better
-    ///   job to prevent the main space from polluting.
-    /// - When a candidate is rejected, the potential victims will stay at the LRU
-    ///   position of the probation access-order queue. (In the paper, they will be
-    ///   promoted (to the MRU position?) to force the eviction policy to select a
-    ///   different set of victims for the next candidate). We may implement the
-    ///   paper's behavior later?
+    /// In Micro Moka all policy weights are 1, so admission compares the candidate
+    /// with the single LRU victim in probation.
     ///
     #[inline]
-    fn admit(
-        candidate: &EntrySizeAndFrequency,
-        _cache: &CacheStore<K, V, S>,
-        deqs: &Deques<K>,
-        freq: &FrequencySketch,
-    ) -> AdmissionResult<K> {
-        let mut victims = EntrySizeAndFrequency::default();
-        let mut victim_nodes = SmallVec::default();
-
-        // Get first potential victim at the LRU position.
-        let mut next_victim = deqs.probation.peek_front_ptr();
-
-        // Aggregate potential victims.
-        while victims.weight < candidate.weight {
-            if candidate.freq < victims.freq {
-                break;
-            }
-            if let Some(victim) = next_victim.take() {
-                next_victim = DeqNode::next_node_ptr(victim);
-                let vic_elem = &unsafe { victim.as_ref() }.element;
-
-                // let vic_entry = cache
-                //     .get(&vic_elem.key)
-                //     .expect("Cannot get an victim entry");
-                victims.add_policy_weight();
-                victims.add_frequency(freq, vic_elem.hash);
-                victim_nodes.push(victim);
-            } else {
-                // No more potential victims.
-                break;
-            }
-        }
-
-        // Admit or reject the candidate.
+    fn admit(candidate_freq: u8, deqs: &Deques<K>, freq: &FrequencySketch) -> AdmissionResult<K> {
+        let Some(victim_node) = deqs.probation.peek_front_ptr() else {
+            return AdmissionResult::Rejected;
+        };
+        let victim_hash = unsafe { victim_node.as_ref() }.element.hash;
+        let victim_freq = freq.frequency(victim_hash);
 
         // TODO: Implement some randomness to mitigate hash DoS attack.
         // See Caffeine's implementation.
 
-        if victims.weight >= candidate.weight && candidate.freq > victims.freq {
-            AdmissionResult::Admitted { victim_nodes }
+        if candidate_freq > victim_freq {
+            AdmissionResult::Admitted { victim_node }
         } else {
             AdmissionResult::Rejected
         }
@@ -662,36 +618,11 @@ where
 {
 }
 
-#[derive(Default)]
-struct EntrySizeAndFrequency {
-    weight: u64,
-    freq: u32,
-}
-
-impl EntrySizeAndFrequency {
-    fn new(policy_weight: u64) -> Self {
-        Self {
-            weight: policy_weight,
-            ..Default::default()
-        }
-    }
-
-    fn add_policy_weight(&mut self) {
-        self.weight += 1;
-    }
-
-    fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64) {
-        self.freq += freq.frequency(hash) as u32;
-    }
-}
-
 // Access-Order Queue Node
 type AoqNode<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 
 enum AdmissionResult<K> {
-    Admitted {
-        victim_nodes: SmallVec<[AoqNode<K>; 8]>,
-    },
+    Admitted { victim_node: AoqNode<K> },
     Rejected,
 }
 

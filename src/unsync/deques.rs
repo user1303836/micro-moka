@@ -49,15 +49,29 @@ impl<K> Deques<K> {
     pub(crate) fn move_to_back_ao<V>(&mut self, entry: &ValueEntry<K, V>) {
         if let Some(tagged_node) = entry.access_order_q_node() {
             let (node, tag) = tagged_node.decompose();
-            let p = unsafe { node.as_ref() };
             match tag.into() {
-                CacheRegion::Window if self.window.contains(p) => {
+                CacheRegion::Window => {
+                    #[cfg(debug_assertions)]
+                    {
+                        let p = unsafe { node.as_ref() };
+                        debug_assert!(self.window.contains(p));
+                    }
                     unsafe { self.window.move_to_back(node) };
                 }
-                CacheRegion::MainProbation if self.probation.contains(p) => {
+                CacheRegion::MainProbation => {
+                    #[cfg(debug_assertions)]
+                    {
+                        let p = unsafe { node.as_ref() };
+                        debug_assert!(self.probation.contains(p));
+                    }
                     unsafe { self.probation.move_to_back(node) };
                 }
-                CacheRegion::MainProtected if self.protected.contains(p) => {
+                CacheRegion::MainProtected => {
+                    #[cfg(debug_assertions)]
+                    {
+                        let p = unsafe { node.as_ref() };
+                        debug_assert!(self.protected.contains(p));
+                    }
                     unsafe { self.protected.move_to_back(node) };
                 }
                 _ => unreachable!(),
@@ -104,15 +118,26 @@ impl<K> Deques<K> {
         tagged_node: TagNonNull<DeqNode<KeyHashDate<K>>, 2>,
     ) {
         let (node, tag) = tagged_node.decompose();
-        if deq.region() == tag && deq.contains(node.as_ref()) {
-            // https://github.com/moka-rs/moka/issues/64
-            deq.unlink_and_drop(node);
-        } else {
+        if deq.region() != tag {
             panic!(
                 "unlink_node - node is not a member of {} deque. {:?}",
                 deq_name,
                 node.as_ref()
             )
         }
+
+        #[cfg(debug_assertions)]
+        {
+            if !deq.contains(node.as_ref()) {
+                panic!(
+                    "unlink_node - node is not a member of {} deque. {:?}",
+                    deq_name,
+                    node.as_ref()
+                )
+            }
+        }
+
+        // https://github.com/moka-rs/moka/issues/64
+        deq.unlink_and_drop(node);
     }
 }

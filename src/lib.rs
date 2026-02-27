@@ -53,7 +53,7 @@ pub mod unsync;
 
 pub use policy::Policy;
 
-#[cfg(all(doctest))]
+#[cfg(doctest)]
 mod doctests {
     // https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html#include-items-only-when-collecting-doctests
     #[doc = include_str!("../README.md")]

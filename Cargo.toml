@@ -15,7 +15,6 @@ readme = "README.md"
 exclude = [".circleci", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 
 [dependencies]
-smallvec = "1.8"
 tagptr = "0.2"
 
 # Opt-out serde and stable_deref_trait features
