@@ -15,6 +15,7 @@ readme = "README.md"
 exclude = [".circleci", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 
 [dependencies]
+hashbrown = { version = "0.16", default-features = false, features = ["raw-entry", "equivalent", "inline-more"] }
 # Opt-out serde and stable_deref_trait features
 # https://github.com/Manishearth/triomphe/pull/5
 triomphe = { version = "0.1.13", default-features = false }

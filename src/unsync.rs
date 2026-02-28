@@ -1,7 +1,7 @@
 //! Provides a *not* thread-safe cache implementation built upon
-//! [`std::collections::HashMap`][std-hashmap].
+//! [`hashbrown::HashMap`][hb-hashmap].
 //!
-//! [std-hashmap]: https://doc.rust-lang.org/std/collections/struct.HashMap.html
+//! [hb-hashmap]: https://docs.rs/hashbrown/latest/hashbrown/struct.HashMap.html
 
 mod builder;
 mod cache;
