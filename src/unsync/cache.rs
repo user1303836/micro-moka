@@ -1,32 +1,27 @@
-use super::{deques::Deques, CacheBuilder, Iter, KeyHashDate, ValueEntry};
+use super::{CacheBuilder, IndexDeque, Iter, Slab, SlabEntry, SENTINEL};
 use crate::{
-    common::{self, deque::DeqNode, frequency_sketch::FrequencySketch},
+    common::{self, frequency_sketch::FrequencySketch},
     Policy,
 };
 
-use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
+use hashbrown::HashTable;
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
     fmt,
     hash::{BuildHasher, Hash},
-    ptr::NonNull,
-    rc::Rc,
 };
 
 const EVICTION_BATCH_SIZE: usize = 100;
 
-type CacheStore<K, V, S> = HashMap<Rc<K>, ValueEntry<K, V>, S>;
-
 /// An in-memory cache that is _not_ thread-safe.
 ///
-/// `Cache` utilizes a hash table [`hashbrown::HashMap`][hb-hashmap] for the
+/// `Cache` utilizes a hash table [`hashbrown::HashTable`][hb-hashtable] for the
 /// central key-value storage. `Cache` performs a best-effort bounding of the
 /// map using an entry replacement algorithm to determine which entries to evict
 /// when the capacity is exceeded.
 ///
-/// [hb-hashmap]: https://docs.rs/hashbrown/latest/hashbrown/struct.HashMap.html
+/// [hb-hashtable]: https://docs.rs/hashbrown/latest/hashbrown/struct.HashTable.html
 ///
 /// # Characteristic difference between `unsync` and `sync`/`future` caches
 ///
@@ -95,9 +90,10 @@ type CacheStore<K, V, S> = HashMap<Rc<K>, ValueEntry<K, V>, S>;
 pub struct Cache<K, V, S = RandomState> {
     max_capacity: Option<u64>,
     entry_count: u64,
-    cache: CacheStore<K, V, S>,
+    table: HashTable<u32>,
     build_hasher: S,
-    deques: Deques<K>,
+    slab: Slab<K, V>,
+    deque: IndexDeque,
     frequency_sketch: FrequencySketch,
     frequency_sketch_enabled: bool,
 }
@@ -106,7 +102,6 @@ impl<K, V, S> fmt::Debug for Cache<K, V, S>
 where
     K: fmt::Debug + Eq + Hash,
     V: fmt::Debug,
-    // TODO: Remove these bounds from S.
     S: BuildHasher + Clone,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -197,18 +192,20 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
     ) -> Self {
-        let cache = HashMap::with_capacity_and_hasher(
-            initial_capacity.unwrap_or_default(),
-            build_hasher.clone(),
-        );
+        let init_cap = initial_capacity.unwrap_or_default();
 
         Self {
             max_capacity,
             entry_count: 0,
-            cache,
+            table: HashTable::with_capacity(init_cap),
             build_hasher,
-            deques: Default::default(),
-            frequency_sketch: Default::default(),
+            slab: if init_cap > 0 {
+                Slab::with_capacity(init_cap)
+            } else {
+                Slab::new()
+            },
+            deque: IndexDeque::default(),
+            frequency_sketch: FrequencySketch::default(),
             frequency_sketch_enabled: false,
         }
     }
@@ -221,12 +218,15 @@ where
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
     #[inline]
-    pub fn contains_key<Q>(&mut self, key: &Q) -> bool
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        Rc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.cache.contains_key(key)
+        let hash = self.hash(key);
+        self.table
+            .find(hash, |&idx| self.slab.get(idx).key.borrow() == key)
+            .is_some()
     }
 
     /// Returns an immutable reference of the value corresponding to the key.
@@ -236,24 +236,22 @@ where
     #[inline]
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
-        Rc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.hash(key);
         self.frequency_sketch.increment(hash);
 
-        match self
-            .cache
-            .raw_entry_mut()
-            .from_key_hashed_nocheck(hash, key)
+        let idx = match self
+            .table
+            .find(hash, |&idx| self.slab.get(idx).key.borrow() == key)
         {
-            RawEntryMut::Occupied(o) => {
-                let entry = o.into_mut();
-                Self::record_hit(&mut self.deques, entry);
-                Some(&entry.value)
-            }
-            RawEntryMut::Vacant(_) => None,
-        }
+            Some(&idx) => idx,
+            None => return None,
+        };
+
+        self.deque.move_to_back(&mut self.slab, idx);
+        Some(&self.slab.get(idx).value)
     }
 
     /// Inserts a key-value pair into the cache.
@@ -265,28 +263,32 @@ where
         if weights_to_evict > 0 {
             self.evict_lru_entries(weights_to_evict);
         }
-        let policy_weight = 1;
-        let key = Rc::new(key);
+
         let hash = self.hash(&key);
-        let entry = ValueEntry::new(value);
 
-        let old_entry = match self
-            .cache
-            .raw_entry_mut()
-            .from_key_hashed_nocheck(hash, &key)
+        if let Some(&idx) = self
+            .table
+            .find(hash, |&idx| self.slab.get(idx).key.borrow() == &key)
         {
-            RawEntryMut::Occupied(mut o) => Some(std::mem::replace(o.get_mut(), entry)),
-            RawEntryMut::Vacant(v) => {
-                v.insert_hashed_nocheck(hash, Rc::clone(&key), entry);
-                None
-            }
-        };
-
-        if let Some(old_entry) = old_entry {
-            self.handle_update(key, hash, policy_weight, old_entry);
-        } else {
-            self.handle_insert(key, hash, policy_weight);
+            self.slab.get_mut(idx).value = value;
+            self.deque.move_to_back(&mut self.slab, idx);
+            return;
         }
+
+        let slab_entry = SlabEntry {
+            key,
+            value,
+            hash,
+            prev: SENTINEL,
+            next: SENTINEL,
+        };
+        let idx = self.slab.allocate(slab_entry);
+
+        let slab = &self.slab;
+        self.table
+            .insert_unique(hash, idx, |&existing_idx| slab.get(existing_idx).hash);
+
+        self.handle_insert(idx, hash);
     }
 
     /// Discards any cached value for the key.
@@ -296,11 +298,18 @@ where
     #[inline]
     pub fn invalidate<Q>(&mut self, key: &Q)
     where
-        Rc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(mut entry) = self.cache.remove(key) {
-            self.deques.unlink_ao(&mut entry);
+        let hash = self.hash(key);
+        let slab = &self.slab;
+        if let Ok(entry) = self
+            .table
+            .find_entry(hash, |&idx| slab.get(idx).key.borrow() == key)
+        {
+            let (idx, _) = entry.remove();
+            self.deque.unlink(&mut self.slab, idx);
+            self.slab.deallocate(idx);
             self.entry_count -= 1;
         }
     }
@@ -312,13 +321,20 @@ where
     #[inline]
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
-        Rc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(mut entry) = self.cache.remove(key) {
-            self.deques.unlink_ao(&mut entry);
+        let hash = self.hash(key);
+        let slab = &self.slab;
+        if let Ok(entry) = self
+            .table
+            .find_entry(hash, |&idx| slab.get(idx).key.borrow() == key)
+        {
+            let (idx, _) = entry.remove();
+            self.deque.unlink(&mut self.slab, idx);
+            let slab_entry = self.slab.deallocate(idx);
             self.entry_count -= 1;
-            Some(entry.value)
+            Some(slab_entry.value)
         } else {
             None
         }
@@ -332,21 +348,22 @@ where
     #[cold]
     #[inline(never)]
     pub fn invalidate_all(&mut self) {
-        // Phase 1: swap out the cache before resetting internal state so that
-        // a panic in V::drop leaves `self` in a consistent (empty) state.
-        let old_capacity = self.cache.capacity();
-        let old_cache = std::mem::replace(
-            &mut self.cache,
-            HashMap::with_hasher(self.build_hasher.clone()),
-        );
-        self.deques.clear();
+        let old_capacity = self.table.capacity();
+        let old_table = std::mem::replace(&mut self.table, HashTable::new());
+        let old_slab = std::mem::replace(&mut self.slab, Slab::new());
+        self.deque.clear();
         self.entry_count = 0;
 
-        // If V::drop panics, `self` is already in a valid empty state.
-        drop(old_cache);
+        drop(old_table);
+        drop(old_slab);
 
-        // Phase 2: best effort capacity restoration for future inserts.
-        let _ = self.cache.try_reserve(old_capacity);
+        self.table.reserve(old_capacity, |&idx| {
+            // This closure is for rehashing during reserve. Since the table is
+            // empty after the swap, this will never be called, but we must
+            // provide it.
+            let _ = idx;
+            0
+        });
     }
 
     /// Discards cached values that satisfy a predicate.
@@ -358,37 +375,26 @@ where
     /// Like the `invalidate` method, this method does not clear the historic
     /// popularity estimator of keys so that it retains the client activities of
     /// trying to retrieve an item.
-    // -----------------------------------------------------------------------
-    // (The followings are not doc comments)
-    // We need this #[allow(...)] to avoid a false Clippy warning about needless
-    // collect to create keys_to_invalidate.
-    // clippy 0.1.52 (9a1dfd2dc5c 2021-04-30) in Rust 1.52.0-beta.7
     #[cold]
     #[inline(never)]
-    #[allow(clippy::needless_collect)]
     pub fn invalidate_entries_if(&mut self, mut predicate: impl FnMut(&K, &V) -> bool) {
-        let Self { cache, deques, .. } = self;
-
-        // Since we can't do cache.iter() and cache.remove() at the same time,
-        // invalidation needs to run in two steps:
-        // 1. Examine all entries in this cache and collect keys to invalidate.
-        // 2. Remove entries for the keys.
-
-        let keys_to_invalidate = cache
+        let indices_to_invalidate: Vec<u32> = self
+            .slab
             .iter()
-            .filter(|(key, entry)| (predicate)(key, &entry.value))
-            .map(|(key, _)| Rc::clone(key))
-            .collect::<Vec<_>>();
+            .filter(|(_, entry)| predicate(&entry.key, &entry.value))
+            .map(|(idx, _)| idx)
+            .collect();
 
         let mut invalidated = 0u64;
-
-        keys_to_invalidate.into_iter().for_each(|k| {
-            if let Some(mut entry) = cache.remove(&k) {
-                let _weight = entry.policy_weight();
-                deques.unlink_ao(&mut entry);
+        for idx in indices_to_invalidate {
+            let hash = self.slab.get(idx).hash;
+            if let Ok(entry) = self.table.find_entry(hash, |&table_idx| table_idx == idx) {
+                entry.remove();
+                self.deque.unlink(&mut self.slab, idx);
+                self.slab.deallocate(idx);
                 invalidated += 1;
             }
-        });
+        }
         self.entry_count -= invalidated;
     }
 
@@ -415,7 +421,7 @@ where
     /// ```
     ///
     pub fn iter(&self) -> Iter<'_, K, V> {
-        Iter::new(self, self.cache.iter())
+        Iter::new(&self.slab.entries)
     }
 }
 
@@ -430,15 +436,10 @@ where
     #[inline]
     fn hash<Q>(&self, key: &Q) -> u64
     where
-        Rc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.build_hasher.hash_one(key)
-    }
-
-    #[inline]
-    fn record_hit(deques: &mut Deques<K>, entry: &mut ValueEntry<K, V>) {
-        deques.move_to_back_ao(entry)
     }
 
     #[inline]
@@ -488,57 +489,33 @@ where
     }
 
     #[inline]
-    fn handle_insert(&mut self, key: Rc<K>, hash: u64, policy_weight: u32) {
-        debug_assert_eq!(policy_weight, 1);
-        let has_free_space = self.has_enough_capacity(policy_weight, self.entry_count);
-        let (cache, deqs, freq) = (&mut self.cache, &mut self.deques, &self.frequency_sketch);
+    fn handle_insert(&mut self, idx: u32, hash: u64) {
+        let has_free_space = self.has_enough_capacity(1, self.entry_count);
 
         if has_free_space {
-            let key = Rc::clone(&key);
-            let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
-                RawEntryMut::Occupied(o) => o.into_mut(),
-                RawEntryMut::Vacant(_) => unreachable!(),
-            };
-            deqs.push_back_ao(
-                KeyHashDate::new(Rc::clone(&key), hash),
-                entry,
-            );
+            self.deque.push_back(&mut self.slab, idx);
             self.entry_count += 1;
 
             if self.should_enable_frequency_sketch() {
                 self.enable_frequency_sketch();
             }
-
             return;
         }
 
         if let Some(max) = self.max_capacity {
-            if policy_weight as u64 > max {
-                cache.remove(&Rc::clone(&key));
+            if max == 0 {
+                self.remove_by_index(idx);
                 return;
             }
         }
 
-        let candidate_freq = freq.frequency(hash);
+        let candidate_freq = self.frequency_sketch.frequency(hash);
 
-        match Self::admit(candidate_freq, deqs, freq) {
-            AdmissionResult::Admitted { victim_node } => {
-                let mut vic_entry = cache
-                    .remove(unsafe { &victim_node.as_ref().element.key })
-                    .expect("Cannot remove a victim from the hash map");
-                deqs.unlink_ao(&mut vic_entry);
-                self.entry_count -= 1;
+        match self.admit(candidate_freq) {
+            AdmissionResult::Admitted { victim_index } => {
+                self.remove_by_index(victim_index);
 
-                let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
-                    RawEntryMut::Occupied(o) => o.into_mut(),
-                    RawEntryMut::Vacant(_) => unreachable!(),
-                };
-                let key = Rc::clone(&key);
-                deqs.push_back_ao(
-                    KeyHashDate::new(Rc::clone(&key), hash),
-                    entry,
-                );
-
+                self.deque.push_back(&mut self.slab, idx);
                 self.entry_count += 1;
 
                 if self.should_enable_frequency_sketch() {
@@ -546,100 +523,71 @@ where
                 }
             }
             AdmissionResult::Rejected => {
-                cache.remove(&key);
+                self.remove_by_index(idx);
             }
         }
     }
 
-    /// Performs admission explained in the paper:
-    /// [Lightweight Robust Size Aware Cache Management][size-aware-cache-paper]
-    /// by Gil Einziger, Ohad Eytan, Roy Friedman, Ben Manes.
-    ///
-    /// [size-aware-cache-paper]: https://arxiv.org/abs/2105.08770
-    ///
-    /// In Micro Moka all policy weights are 1, so admission compares the candidate
-    /// with the single LRU victim in probation.
-    ///
     #[inline]
-    fn admit(candidate_freq: u8, deqs: &Deques<K>, freq: &FrequencySketch) -> AdmissionResult<K> {
-        let Some(victim_node) = deqs.deque.peek_front_ptr() else {
+    fn admit(&self, candidate_freq: u8) -> AdmissionResult {
+        let Some(victim_index) = self.deque.peek_front() else {
             return AdmissionResult::Rejected;
         };
-        let victim_hash = unsafe { victim_node.as_ref() }.element.hash;
-        let victim_freq = freq.frequency(victim_hash);
-
-        // TODO: Implement some randomness to mitigate hash DoS attack.
-        // See Caffeine's implementation.
+        let victim_hash = self.slab.get(victim_index).hash;
+        let victim_freq = self.frequency_sketch.frequency(victim_hash);
 
         if candidate_freq > victim_freq {
-            AdmissionResult::Admitted { victim_node }
+            AdmissionResult::Admitted { victim_index }
         } else {
             AdmissionResult::Rejected
         }
     }
 
-    #[inline]
-    fn handle_update(
-        &mut self,
-        key: Rc<K>,
-        hash: u64,
-        policy_weight: u32,
-        old_entry: ValueEntry<K, V>,
-    ) {
-        let (cache, deqs) = (&mut self.cache, &mut self.deques);
-        let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
-            RawEntryMut::Occupied(o) => o.into_mut(),
-            RawEntryMut::Vacant(_) => unreachable!(),
-        };
-        entry.replace_deq_nodes_with(old_entry);
-        entry.set_policy_weight(policy_weight);
-        deqs.move_to_back_ao(entry);
+    fn remove_by_index(&mut self, idx: u32) {
+        let hash = self.slab.get(idx).hash;
+        if let Ok(entry) = self.table.find_entry(hash, |&table_idx| table_idx == idx) {
+            entry.remove();
+        }
+        let entry = self.slab.get(idx);
+        if entry.prev != SENTINEL || entry.next != SENTINEL || self.deque.head == idx {
+            self.deque.unlink(&mut self.slab, idx);
+            self.entry_count -= 1;
+        }
+        self.slab.deallocate(idx);
     }
 
     #[cold]
     #[inline(never)]
     fn evict_lru_entries(&mut self, weights_to_evict: u64) {
         debug_assert!(weights_to_evict > 0);
-        let mut evicted_count = 0u64;
-        let mut evicted_policy_weight = 0u64;
+        let mut evicted = 0u64;
 
-        {
-            let deqs = &mut self.deques;
-            let (deque, cache) = (&mut deqs.deque, &mut self.cache);
-
-            for _ in 0..EVICTION_BATCH_SIZE {
-                if evicted_policy_weight >= weights_to_evict {
-                    break;
-                }
-
-                #[allow(clippy::map_clone)]
-                let key = deque
-                    .peek_front()
-                    .map(|node| Rc::clone(&node.element.key));
-
-                if key.is_none() {
-                    break;
-                }
-                let key = key.unwrap();
-
-                if let Some(mut entry) = cache.remove(&key) {
-                    let weight = entry.policy_weight();
-                    Deques::unlink_ao_from_deque(deque, &mut entry);
-                    evicted_count += 1;
-                    evicted_policy_weight = evicted_policy_weight.saturating_add(weight as u64);
-                } else {
-                    deque.pop_front();
-                }
+        for _ in 0..EVICTION_BATCH_SIZE {
+            if evicted >= weights_to_evict {
+                break;
             }
+
+            let Some(victim_idx) = self.deque.peek_front() else {
+                break;
+            };
+
+            let victim_hash = self.slab.get(victim_idx).hash;
+            if let Ok(entry) = self
+                .table
+                .find_entry(victim_hash, |&table_idx| table_idx == victim_idx)
+            {
+                entry.remove();
+            }
+
+            self.deque.unlink(&mut self.slab, victim_idx);
+            self.slab.deallocate(victim_idx);
+            evicted += 1;
         }
 
-        self.entry_count -= evicted_count;
+        self.entry_count -= evicted;
     }
 }
 
-//
-// for testing
-//
 #[cfg(test)]
 impl<K, V, S> Cache<K, V, S>
 where
@@ -648,19 +596,11 @@ where
 {
 }
 
-// Access-Order Queue Node
-type AoqNode<K> = NonNull<DeqNode<KeyHashDate<K>>>;
-
-enum AdmissionResult<K> {
-    Admitted { victim_node: AoqNode<K> },
+enum AdmissionResult {
+    Admitted { victim_index: u32 },
     Rejected,
 }
 
-//
-// private free-standing functions
-//
-
-// To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
     use super::Cache;
@@ -778,7 +718,7 @@ mod tests {
         assert!(!cache.contains_key(&2));
         assert!(cache.contains_key(&3));
 
-        assert_eq!(cache.cache.len(), 2);
+        assert_eq!(cache.table.len(), 2);
 
         cache.invalidate_entries_if(|_k, &v| v == "alice");
         cache.invalidate_entries_if(|_k, &v| v == "bob");
@@ -789,13 +729,12 @@ mod tests {
         assert!(!cache.contains_key(&1));
         assert!(!cache.contains_key(&3));
 
-        assert_eq!(cache.cache.len(), 0);
+        assert_eq!(cache.table.len(), 0);
     }
 
     #[cfg_attr(target_pointer_width = "16", ignore)]
     #[test]
     fn test_skt_capacity_will_not_overflow() {
-        // power of two
         let pot = |exp| 2u64.pow(exp);
 
         let ensure_sketch_len = |max_capacity, len, name| {
@@ -810,27 +749,20 @@ mod tests {
             ensure_sketch_len(0, 128, "0");
             ensure_sketch_len(128, 128, "128");
             ensure_sketch_len(pot16, pot16, "pot16");
-            // due to ceiling to next_power_of_two
             ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
-            // due to ceiling to next_power_of_two
             ensure_sketch_len(pot24 - 1, pot24, "pot24 - 1");
             ensure_sketch_len(pot24, pot24, "pot24");
             ensure_sketch_len(pot(27), pot24, "pot(27)");
             ensure_sketch_len(u32::MAX as u64, pot24, "u32::MAX");
         } else {
-            // target_pointer_width: 64 or larger.
             let pot30 = pot(30);
             let pot16 = pot(16);
             ensure_sketch_len(0, 128, "0");
             ensure_sketch_len(128, 128, "128");
             ensure_sketch_len(pot16, pot16, "pot16");
-            // due to ceiling to next_power_of_two
             ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
 
-            // The following tests will allocate large memory (~8GiB).
-            // Skip when running on Circle CI.
             if !cfg!(circleci) {
-                // due to ceiling to next_power_of_two
                 ensure_sketch_len(pot30 - 1, pot30, "pot30- 1");
                 ensure_sketch_len(pot30, pot30, "pot30");
                 ensure_sketch_len(u64::MAX, pot30, "u64::MAX");
@@ -960,7 +892,7 @@ mod tests {
         assert!(result.is_err());
 
         assert_eq!(cache.entry_count(), 0);
-        assert_eq!(cache.cache.len(), 0);
+        assert_eq!(cache.table.len(), 0);
 
         cache.insert(
             4,
@@ -1010,8 +942,6 @@ mod tests {
         cache.insert(3, "c");
         assert_eq!(cache.entry_count(), 3);
 
-        // Boost frequencies of existing entries so new ones get rejected,
-        // proving eviction logic still runs.
         for _ in 0..5 {
             cache.get(&1);
             cache.get(&2);
@@ -1019,8 +949,6 @@ mod tests {
         }
 
         cache.insert(4, "d");
-        // Cache should still be at capacity (3). The new entry was either
-        // admitted (evicting one) or rejected, but count never exceeds max.
         assert!(cache.entry_count() <= 3);
     }
 
@@ -1029,19 +957,16 @@ mod tests {
         let mut cache = Cache::new(4);
         cache.enable_frequency_sketch_for_testing();
 
-        // Warmup phase: sub-capacity
         cache.insert(1, "a");
         cache.insert(2, "b");
         assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.weights_to_evict(), 0);
 
-        // Fill to capacity
         cache.insert(3, "c");
         cache.insert(4, "d");
         assert_eq!(cache.entry_count(), 4);
         assert_eq!(cache.weights_to_evict(), 0);
 
-        // Boost frequencies so admission works predictably
         for _ in 0..5 {
             cache.get(&1);
             cache.get(&2);
@@ -1049,7 +974,6 @@ mod tests {
             cache.get(&4);
         }
 
-        // Over capacity: eviction must kick in
         cache.insert(5, "e");
         assert!(cache.entry_count() <= 4);
     }

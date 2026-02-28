@@ -1,6 +1,5 @@
 use std::convert::TryInto;
 
-pub(crate) mod deque;
 pub(crate) mod frequency_sketch;
 
 // Ensures the value fits in a range of `128u32..=u32::MAX`.

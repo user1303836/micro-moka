@@ -1,32 +1,27 @@
-use super::{Cache, ValueEntry};
-
-use std::{hash::Hash, rc::Rc};
-
-type HashMapIter<'i, K, V> = hashbrown::hash_map::Iter<'i, Rc<K>, ValueEntry<K, V>>;
+use super::SlabEntry;
 
 pub struct Iter<'i, K, V> {
-    iter: HashMapIter<'i, K, V>,
+    inner: std::slice::Iter<'i, Option<SlabEntry<K, V>>>,
 }
 
 impl<'i, K, V> Iter<'i, K, V> {
-    pub(crate) fn new(
-        _cache: &'i Cache<K, V, impl std::hash::BuildHasher>,
-        iter: HashMapIter<'i, K, V>,
-    ) -> Self {
-        Self { iter }
+    pub(crate) fn new(entries: &'i [Option<SlabEntry<K, V>>]) -> Self {
+        Self {
+            inner: entries.iter(),
+        }
     }
 }
 
-impl<'i, K, V> Iterator for Iter<'i, K, V>
-where
-    K: Hash + Eq,
-{
+impl<'i, K, V> Iterator for Iter<'i, K, V> {
     type Item = (&'i K, &'i V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((k, entry)) = self.iter.next() {
-            return Some((k, &entry.value));
+        loop {
+            match self.inner.next() {
+                Some(Some(entry)) => return Some((&entry.key, &entry.value)),
+                Some(None) => continue,
+                None => return None,
+            }
         }
-        None
     }
 }
