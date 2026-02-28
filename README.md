@@ -21,7 +21,7 @@ assert_eq!(cache.get(&"key"), Some(&"value"));
 
 **W-TinyLFU is a better eviction policy.** Standard LRU caches are vulnerable to scan pollution -- a single sequential scan can flush the entire cache. W-TinyLFU uses a frequency sketch (Count-Min Sketch with 4-bit counters) to admit only entries that are likely to be accessed again, producing significantly higher hit ratios on real-world workloads compared to LRU, FIFO, or CLOCK.
 
-**Minimal overhead.** Two production dependencies (`hashbrown`, `triomphe`). No allocator, no async runtime, no parking lot. Compiles fast, produces small binaries.
+**Minimal overhead.** One production dependency (`hashbrown`). No allocator, no async runtime, no parking lot, no unsafe code. Compiles fast, produces small binaries.
 
 **Single-threaded by design.** No `Arc`, no `Mutex`, no atomic operations. If your cache lives on one thread -- CLI tools, WASM, game loops, compilers, single-threaded servers -- you pay zero synchronization cost.
 
@@ -102,7 +102,7 @@ The frequency sketch uses 4-bit counters with periodic aging (halved when a samp
 | Async support | No runtime dependency |
 | Weight-based eviction (`Weigher`) | All entries cost 1 slot; simpler admission |
 | TTL / TTI expiration | No timer overhead; entries live until evicted or invalidated |
-| `smallvec`, `tagptr` dependencies | Simplified internals |
+| `smallvec`, `tagptr`, `triomphe` dependencies | Simplified internals |
 
 ## Minimum Supported Rust Version
 
@@ -127,8 +127,8 @@ cargo fmt --all -- --check
 # Docs (nightly)
 cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' doc --no-deps
 
-# Miri (verify unsafe deque code)
-cargo +nightly miri test deque
+# Miri
+cargo +nightly miri test
 ```
 
 ## Releases
