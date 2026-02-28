@@ -1,6 +1,6 @@
 use super::{deques::Deques, CacheBuilder, Iter, KeyHashDate, ValueEntry};
 use crate::{
-    common::{self, deque::DeqNode, frequency_sketch::FrequencySketch, CacheRegion},
+    common::{self, deque::DeqNode, frequency_sketch::FrequencySketch},
     Policy,
 };
 
@@ -466,12 +466,10 @@ where
             let key = Rc::clone(&key);
             let entry = cache.get_mut(&key).unwrap();
             deqs.push_back_ao(
-                CacheRegion::MainProbation,
                 KeyHashDate::new(Rc::clone(&key), hash),
                 entry,
             );
             self.entry_count += 1;
-            // self.saturating_add_to_total_weight(policy_weight as u64);
 
             if self.should_enable_frequency_sketch() {
                 self.enable_frequency_sketch();
@@ -503,7 +501,6 @@ where
                 let entry = cache.get_mut(&key).unwrap();
                 let key = Rc::clone(&key);
                 deqs.push_back_ao(
-                    CacheRegion::MainProbation,
                     KeyHashDate::new(Rc::clone(&key), hash),
                     entry,
                 );
@@ -534,7 +531,7 @@ where
     ///
     #[inline]
     fn admit(candidate_freq: u8, deqs: &Deques<K>, freq: &FrequencySketch) -> AdmissionResult<K> {
-        let Some(victim_node) = deqs.probation.peek_front_ptr() else {
+        let Some(victim_node) = deqs.deque.peek_front_ptr() else {
             return AdmissionResult::Rejected;
         };
         let victim_hash = unsafe { victim_node.as_ref() }.element.hash;
@@ -564,25 +561,21 @@ where
 
     #[inline]
     fn evict_lru_entries(&mut self) {
-        const DEQ_NAME: &str = "probation";
-
         let weights_to_evict = self.weights_to_evict();
         let mut evicted_count = 0u64;
         let mut evicted_policy_weight = 0u64;
 
         {
             let deqs = &mut self.deques;
-            let (probation, cache) = (&mut deqs.probation, &mut self.cache);
+            let (deque, cache) = (&mut deqs.deque, &mut self.cache);
 
             for _ in 0..EVICTION_BATCH_SIZE {
                 if evicted_policy_weight >= weights_to_evict {
                     break;
                 }
 
-                // clippy::map_clone will give us a false positive warning here.
-                // Version: clippy 0.1.77 (f2048098a1c 2024-02-09) in Rust 1.77.0-beta.2
                 #[allow(clippy::map_clone)]
-                let key = probation
+                let key = deque
                     .peek_front()
                     .map(|node| Rc::clone(&node.element.key));
 
@@ -593,17 +586,16 @@ where
 
                 if let Some(mut entry) = cache.remove(&key) {
                     let weight = entry.policy_weight();
-                    Deques::unlink_ao_from_deque(DEQ_NAME, probation, &mut entry);
+                    Deques::unlink_ao_from_deque(deque, &mut entry);
                     evicted_count += 1;
                     evicted_policy_weight = evicted_policy_weight.saturating_add(weight as u64);
                 } else {
-                    probation.pop_front();
+                    deque.pop_front();
                 }
             }
         }
 
         self.entry_count -= evicted_count;
-        // self.saturating_sub_from_total_weight(evicted_policy_weight);
     }
 }
 

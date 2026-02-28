@@ -8,8 +8,8 @@ mod cache;
 mod deques;
 mod iter;
 
+use std::ptr::NonNull;
 use std::rc::Rc;
-use tagptr::TagNonNull;
 
 pub use builder::CacheBuilder;
 pub use cache::Cache;
@@ -28,8 +28,7 @@ impl<K> KeyHashDate<K> {
     }
 }
 
-// DeqNode for an access order queue.
-type KeyDeqNodeAo<K> = TagNonNull<DeqNode<KeyHashDate<K>>, 2>;
+type KeyDeqNodeAo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 
 struct EntryInfo<K> {
     access_order_q_node: Option<KeyDeqNodeAo<K>>,

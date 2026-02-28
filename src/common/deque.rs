@@ -14,13 +14,6 @@
 
 use std::{marker::PhantomData, ptr::NonNull};
 
-use super::CacheRegion;
-
-// `crate::{sync,unsync}::DeqNodes` uses a `tagptr::TagNonNull<DeqNode<T>, 2>`
-// pointer. To reserve the space for the 2-bit tag, use 4 bytes as the *minimum*
-// alignment.
-// https://doc.rust-lang.org/reference/type-layout.html#the-alignment-modifiers
-#[repr(align(4))]
 #[derive(PartialEq, Eq)]
 pub(crate) struct DeqNode<T> {
     next: Option<NonNull<DeqNode<T>>>,
@@ -59,7 +52,6 @@ enum DeqCursor<T> {
 }
 
 pub(crate) struct Deque<T> {
-    region: CacheRegion,
     len: usize,
     head: Option<NonNull<DeqNode<T>>>,
     tail: Option<NonNull<DeqNode<T>>>,
@@ -89,19 +81,14 @@ impl<T> Drop for Deque<T> {
 
 // Inner crate public function/methods
 impl<T> Deque<T> {
-    pub(crate) fn new(region: CacheRegion) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            region,
             len: 0,
             head: None,
             tail: None,
             cursor: None,
             marker: PhantomData,
         }
-    }
-
-    pub(crate) fn region(&self) -> CacheRegion {
-        self.region
     }
 
     #[cfg(test)]
@@ -355,12 +342,12 @@ impl<T> Deque<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheRegion::MainProbation, DeqNode, Deque};
+    use super::{DeqNode, Deque};
 
     #[test]
     #[allow(clippy::cognitive_complexity)]
     fn basics() {
-        let mut deque: Deque<String> = Deque::new(MainProbation);
+        let mut deque: Deque<String> = Deque::new();
         assert_eq!(deque.len(), 0);
         assert!(deque.peek_front().is_none());
         assert!(deque.peek_back().is_none());
@@ -616,7 +603,7 @@ mod tests {
 
     #[test]
     fn iter() {
-        let mut deque: Deque<String> = Deque::new(MainProbation);
+        let mut deque: Deque<String> = Deque::new();
         assert!((&mut deque).next().is_none());
 
         let node1 = DeqNode::new("a".into());
@@ -691,7 +678,7 @@ mod tests {
 
     #[test]
     fn next_node() {
-        let mut deque: Deque<String> = Deque::new(MainProbation);
+        let mut deque: Deque<String> = Deque::new();
 
         let node1 = DeqNode::new("a".into());
         deque.push_back(Box::new(node1));
@@ -736,7 +723,7 @@ mod tests {
 
     #[test]
     fn peek_and_move_to_back() {
-        let mut deque: Deque<String> = Deque::new(MainProbation);
+        let mut deque: Deque<String> = Deque::new();
 
         let node1 = DeqNode::new("a".into());
         deque.push_back(Box::new(node1));
@@ -765,8 +752,8 @@ mod tests {
 
     #[test]
     fn reachable_from_head_rejects_foreign_non_head_node() {
-        let mut deque_a: Deque<String> = Deque::new(MainProbation);
-        let mut deque_b: Deque<String> = Deque::new(MainProbation);
+        let mut deque_a: Deque<String> = Deque::new();
+        let mut deque_b: Deque<String> = Deque::new();
 
         deque_a.push_back(Box::new(DeqNode::new("a1".into())));
         deque_a.push_back(Box::new(DeqNode::new("a2".into())));
@@ -788,8 +775,8 @@ mod tests {
     fn contains_panics_on_foreign_non_head_node() {
         use std::panic::{catch_unwind, AssertUnwindSafe};
 
-        let mut deque_a: Deque<String> = Deque::new(MainProbation);
-        let mut deque_b: Deque<String> = Deque::new(MainProbation);
+        let mut deque_a: Deque<String> = Deque::new();
+        let mut deque_b: Deque<String> = Deque::new();
 
         deque_a.push_back(Box::new(DeqNode::new("a1".into())));
         deque_a.push_back(Box::new(DeqNode::new("a2".into())));
@@ -807,7 +794,7 @@ mod tests {
 
     #[test]
     fn contains_rejects_unlinked_node() {
-        let mut deque: Deque<String> = Deque::new(MainProbation);
+        let mut deque: Deque<String> = Deque::new();
 
         let node1 = DeqNode::new("a".to_string());
         let node1_ptr = deque.push_back(Box::new(node1));
@@ -836,7 +823,7 @@ mod tests {
             }
         }
 
-        let mut deque: Deque<X> = Deque::new(MainProbation);
+        let mut deque: Deque<X> = Deque::new();
         let dropped = Rc::new(RefCell::new(Vec::default()));
 
         let node1 = DeqNode::new(X(1, Rc::clone(&dropped)));
