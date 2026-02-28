@@ -259,9 +259,32 @@ where
     /// If the cache has this key present, the value is updated.
     pub fn insert(&mut self, key: K, value: V) {
         self.evict_lru_entries();
-        let policy_weight = 1;
+        let hash = self.build_hasher.hash_one(&key);
+
+        // When the cache is full and this is a new key, check admission BEFORE
+        // allocating Rc<K>, ValueEntry, or touching the HashMap. This avoids
+        // the insert-then-remove overhead when the candidate is rejected.
+        if !self.has_enough_capacity(1, self.entry_count) {
+            let is_update = self
+                .cache
+                .raw_entry()
+                .from_key_hashed_nocheck(hash, &key)
+                .is_some();
+
+            if !is_update {
+                if let Some(max) = self.max_capacity {
+                    if 1u64 > max {
+                        return;
+                    }
+                }
+                let candidate_freq = self.frequency_sketch.frequency(hash);
+                if !Self::would_admit(candidate_freq, &self.deques, &self.frequency_sketch) {
+                    return;
+                }
+            }
+        }
+
         let key = Rc::new(key);
-        let hash = self.hash(&key);
         let entry = ValueEntry::new(value);
 
         let old_entry = match self
@@ -277,9 +300,9 @@ where
         };
 
         if let Some(old_entry) = old_entry {
-            self.handle_update(key, hash, policy_weight, old_entry);
+            self.handle_update(key, hash, 1, old_entry);
         } else {
-            self.handle_insert(key, hash, policy_weight);
+            self.handle_insert(key, hash, 1);
         }
     }
 
@@ -501,43 +524,50 @@ where
             return;
         }
 
-        if let Some(max) = self.max_capacity {
-            if policy_weight as u64 > max {
-                cache.remove(&Rc::clone(&key));
-                return;
-            }
-        }
-
+        // The early admission check in insert() already rejected candidates that
+        // would not be admitted, so this path only runs for admitted candidates.
         let candidate_freq = freq.frequency(hash);
+        let victim_node = match Self::admit(candidate_freq, deqs, freq) {
+            AdmissionResult::Admitted { victim_node } => victim_node,
+            AdmissionResult::Rejected => unreachable!(
+                "rejected candidates are filtered out before HashMap insertion"
+            ),
+        };
 
-        match Self::admit(candidate_freq, deqs, freq) {
-            AdmissionResult::Admitted { victim_node } => {
-                let mut vic_entry = cache
-                    .remove(unsafe { &victim_node.as_ref().element.key })
-                    .expect("Cannot remove a victim from the hash map");
-                deqs.unlink_ao(&mut vic_entry);
-                self.entry_count -= 1;
+        let mut vic_entry = cache
+            .remove(unsafe { &victim_node.as_ref().element.key })
+            .expect("Cannot remove a victim from the hash map");
+        deqs.unlink_ao(&mut vic_entry);
+        self.entry_count -= 1;
 
-                let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
-                    RawEntryMut::Occupied(o) => o.into_mut(),
-                    RawEntryMut::Vacant(_) => unreachable!(),
-                };
-                let key = Rc::clone(&key);
-                deqs.push_back_ao(
-                    KeyHashDate::new(Rc::clone(&key), hash),
-                    entry,
-                );
+        let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
+            RawEntryMut::Occupied(o) => o.into_mut(),
+            RawEntryMut::Vacant(_) => unreachable!(),
+        };
+        let key = Rc::clone(&key);
+        deqs.push_back_ao(
+            KeyHashDate::new(Rc::clone(&key), hash),
+            entry,
+        );
 
-                self.entry_count += 1;
+        self.entry_count += 1;
 
-                if self.should_enable_frequency_sketch() {
-                    self.enable_frequency_sketch();
-                }
-            }
-            AdmissionResult::Rejected => {
-                cache.remove(&key);
-            }
+        if self.should_enable_frequency_sketch() {
+            self.enable_frequency_sketch();
         }
+    }
+
+    /// Returns `true` if a candidate with the given frequency would be admitted
+    /// over the current LRU victim. Used as a pre-check before allocating and
+    /// inserting into the HashMap.
+    #[inline]
+    fn would_admit(candidate_freq: u8, deqs: &Deques<K>, freq: &FrequencySketch) -> bool {
+        let Some(victim_node) = deqs.deque.peek_front_ptr() else {
+            return false;
+        };
+        let victim_hash = unsafe { victim_node.as_ref() }.element.hash;
+        let victim_freq = freq.frequency(victim_hash);
+        candidate_freq > victim_freq
     }
 
     /// Performs admission explained in the paper:
@@ -958,6 +988,96 @@ mod tests {
         );
         assert_eq!(cache.entry_count(), 1);
         assert!(cache.contains_key(&4));
+    }
+
+    #[test]
+    fn rejected_candidate_skips_insertion() {
+        let mut cache = Cache::new(3);
+        cache.enable_frequency_sketch_for_testing();
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+        assert_eq!(cache.entry_count(), 3);
+
+        // Build frequency for existing entries so they beat any newcomer.
+        for _ in 0..5 {
+            cache.get(&"a");
+            cache.get(&"b");
+            cache.get(&"c");
+        }
+
+        // "x" has frequency 0. It should be rejected without ever entering the
+        // HashMap (the early admission check returns before allocating).
+        let count_before = cache.cache.len();
+        cache.insert("x", "xavier");
+        assert_eq!(cache.cache.len(), count_before);
+        assert!(!cache.contains_key(&"x"));
+        assert_eq!(cache.entry_count(), 3);
+    }
+
+    #[test]
+    fn admitted_candidate_evicts_victim() {
+        let mut cache = Cache::new(3);
+        cache.enable_frequency_sketch_for_testing();
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+
+        // Build high frequency for "d" via gets (increments the sketch even
+        // though "d" is not in the cache).
+        for _ in 0..10 {
+            cache.get(&"d");
+        }
+
+        // "d" should be admitted because its frequency exceeds the victim's.
+        cache.insert("d", "dennis");
+        assert!(cache.contains_key(&"d"));
+        assert_eq!(cache.entry_count(), 3);
+    }
+
+    #[test]
+    fn sub_capacity_inserts_bypass_admission() {
+        let mut cache = Cache::new(5);
+        cache.enable_frequency_sketch_for_testing();
+
+        // All inserts should succeed without any admission check because the
+        // cache has room.
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+        assert_eq!(cache.entry_count(), 3);
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(cache.contains_key(&"c"));
+    }
+
+    #[test]
+    fn update_existing_key_always_succeeds_at_capacity() {
+        let mut cache = Cache::new(3);
+        cache.enable_frequency_sketch_for_testing();
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+        assert_eq!(cache.entry_count(), 3);
+
+        // Build very high frequency for all residents so admission is strict.
+        for _ in 0..10 {
+            cache.get(&"a");
+            cache.get(&"b");
+            cache.get(&"c");
+        }
+
+        // Updating an existing key must always succeed regardless of admission.
+        cache.insert("a", "alicia");
+        assert_eq!(cache.get(&"a"), Some(&"alicia"));
+        assert_eq!(cache.entry_count(), 3);
+
+        cache.insert("b", "bobby");
+        assert_eq!(cache.get(&"b"), Some(&"bobby"));
+        assert_eq!(cache.entry_count(), 3);
     }
 
     #[test]
