@@ -4,7 +4,13 @@
 /target/
 Cargo.lock
 node_modules/
+workflow.tsx
+tsconfig.json
+index.ts
 .smithers/
+smithers.db
+smithers.db-shm
+smithers.db-wal
 .super-ralph/
 .claude/
 scheduled-tasks.db
