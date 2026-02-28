@@ -1,6 +1,6 @@
 [package]
 name = "micro-moka"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2018"
 rust-version = "1.76"
 
@@ -15,8 +15,6 @@ readme = "README.md"
 exclude = [".circleci", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 
 [dependencies]
-tagptr = "0.2"
-
 # Opt-out serde and stable_deref_trait features
 # https://github.com/Manishearth/triomphe/pull/5
 triomphe = { version = "0.1.13", default-features = false }
