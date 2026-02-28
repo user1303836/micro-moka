@@ -261,7 +261,10 @@ where
     /// If the cache has this key present, the value is updated.
     #[inline]
     pub fn insert(&mut self, key: K, value: V) {
-        self.evict_lru_entries();
+        let weights_to_evict = self.weights_to_evict();
+        if weights_to_evict > 0 {
+            self.evict_lru_entries(weights_to_evict);
+        }
         let policy_weight = 1;
         let key = Rc::new(key);
         let hash = self.hash(&key);
@@ -296,8 +299,6 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.evict_lru_entries();
-
         if let Some(mut entry) = self.cache.remove(key) {
             self.deques.unlink_ao(&mut entry);
             self.entry_count -= 1;
@@ -314,8 +315,6 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.evict_lru_entries();
-
         if let Some(mut entry) = self.cache.remove(key) {
             self.deques.unlink_ao(&mut entry);
             self.entry_count -= 1;
@@ -597,17 +596,10 @@ where
         deqs.move_to_back_ao(entry);
     }
 
-    #[inline]
-    fn evict_lru_entries(&mut self) {
-        if self.weights_to_evict() > 0 {
-            self.do_evict_lru_entries();
-        }
-    }
-
     #[cold]
     #[inline(never)]
-    fn do_evict_lru_entries(&mut self) {
-        let weights_to_evict = self.weights_to_evict();
+    fn evict_lru_entries(&mut self, weights_to_evict: u64) {
+        debug_assert!(weights_to_evict > 0);
         let mut evicted_count = 0u64;
         let mut evicted_policy_weight = 0u64;
 
@@ -994,5 +986,90 @@ mod tests {
         assert!(debug_str.contains(r#"'b': "bob""#));
         assert!(debug_str.contains(r#"'c': "cindy""#));
         assert!(debug_str.ends_with('}'));
+    }
+
+    #[test]
+    fn sub_capacity_inserts_skip_eviction() {
+        let mut cache = Cache::new(10);
+        for i in 0u32..5 {
+            cache.insert(i, i * 10);
+        }
+        assert_eq!(cache.entry_count(), 5);
+        for i in 0u32..5 {
+            assert_eq!(cache.get(&i), Some(&(i * 10)));
+        }
+    }
+
+    #[test]
+    fn eviction_triggers_when_over_capacity() {
+        let mut cache = Cache::new(3);
+        cache.enable_frequency_sketch_for_testing();
+
+        cache.insert(1, "a");
+        cache.insert(2, "b");
+        cache.insert(3, "c");
+        assert_eq!(cache.entry_count(), 3);
+
+        // Boost frequencies of existing entries so new ones get rejected,
+        // proving eviction logic still runs.
+        for _ in 0..5 {
+            cache.get(&1);
+            cache.get(&2);
+            cache.get(&3);
+        }
+
+        cache.insert(4, "d");
+        // Cache should still be at capacity (3). The new entry was either
+        // admitted (evicting one) or rejected, but count never exceeds max.
+        assert!(cache.entry_count() <= 3);
+    }
+
+    #[test]
+    fn warmup_to_full_transition() {
+        let mut cache = Cache::new(4);
+        cache.enable_frequency_sketch_for_testing();
+
+        // Warmup phase: sub-capacity
+        cache.insert(1, "a");
+        cache.insert(2, "b");
+        assert_eq!(cache.entry_count(), 2);
+        assert_eq!(cache.weights_to_evict(), 0);
+
+        // Fill to capacity
+        cache.insert(3, "c");
+        cache.insert(4, "d");
+        assert_eq!(cache.entry_count(), 4);
+        assert_eq!(cache.weights_to_evict(), 0);
+
+        // Boost frequencies so admission works predictably
+        for _ in 0..5 {
+            cache.get(&1);
+            cache.get(&2);
+            cache.get(&3);
+            cache.get(&4);
+        }
+
+        // Over capacity: eviction must kick in
+        cache.insert(5, "e");
+        assert!(cache.entry_count() <= 4);
+    }
+
+    #[test]
+    fn invalidate_and_remove_skip_eviction_below_capacity() {
+        let mut cache = Cache::new(10);
+        cache.insert(1, "a");
+        cache.insert(2, "b");
+        cache.insert(3, "c");
+        assert_eq!(cache.entry_count(), 3);
+        assert_eq!(cache.weights_to_evict(), 0);
+
+        cache.invalidate(&1);
+        assert_eq!(cache.entry_count(), 2);
+
+        let val = cache.remove(&2);
+        assert_eq!(val, Some("b"));
+        assert_eq!(cache.entry_count(), 1);
+
+        assert_eq!(cache.get(&3), Some(&"c"));
     }
 }

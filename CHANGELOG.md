@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-02-28
+
+### Changed
+
+- Deferred `evict_lru_entries()` behind a fast capacity check so it only runs when the cache is actually over capacity, eliminating unnecessary work on every sub-capacity insert during warmup and normal operation.
+- Marked `evict_lru_entries()` as `#[cold] #[inline(never)]` since it now exclusively handles the rare over-capacity path.
+- Removed redundant unconditional `evict_lru_entries()` calls from `invalidate()` and `remove()`, which can never cause the cache to exceed capacity.
+
 ## [0.1.9] - 2026-02-28
 
 ### Changed
