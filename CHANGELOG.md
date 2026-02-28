@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-02-28
+
+### Changed
+
+- Added `#[inline]` to hot path public API functions (`get`, `insert`, `contains_key`, `invalidate`, `remove`) and core private helpers (`record_hit`, `has_enough_capacity`, `weights_to_evict`, `handle_update`) to enable cross-crate inlining for downstream users.
+- Added `#[inline]` to frequency sketch hot path methods (`frequency`, `increment`, `index_of`, `increment_at`) for better inlining in the admission/eviction loop.
+- Split `evict_lru_entries()` into a thin `#[inline]` early-return check and a `#[cold] #[inline(never)]` inner body (`do_evict_lru_entries`) so the common no-eviction path stays in the instruction cache.
+- Marked `invalidate_all()` and `invalidate_entries_if()` as `#[cold] #[inline(never)]` to keep infrequent bulk operations out of the hot instruction cache.
+
 ## [0.1.7] - 2026-02-28
 
 ### Changed
