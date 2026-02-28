@@ -4,7 +4,13 @@
 /target/
 Cargo.lock
 node_modules/
+.smithers/
 .super-ralph/
+.claude/
+scheduled-tasks.db
+workflows/**
+!workflows/phase-workflow.tsx
+.vscode/
 bun.lock
 package.json
 CLAUDE.md
