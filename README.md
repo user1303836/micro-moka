@@ -3,156 +3,156 @@
 [![GitHub Actions][gh-actions-badge]][gh-actions]
 [![crates.io release][release-badge]][crate]
 [![docs][docs-badge]][docs]
-
-<!-- [![coverage status][coveralls-badge]][coveralls] -->
-
 [![license][license-badge]](#license)
 
-Micro Moka is a lightweight, single-threaded cache library for Rust. It is a specialized fork of [Mini Moka][mini-moka-git], engineered for use cases where binary size, compile times, and simplicity are paramount, while maintaining the high hit-ratio of the W-TinyLFU eviction policy.
+A fast, lightweight, single-threaded cache for Rust. Forked from [Mini Moka][mini-moka-git] and stripped down to the essentials: no async, no concurrency overhead, no weight-based eviction, no TTL. Just a bounded cache with the [W-TinyLFU][tiny-lfu] eviction policy from [Caffeine][caffeine-git] -- the same algorithm that powers some of the highest hit-ratio caches in production.
 
-Micro Moka provides a non-thread-safe cache implementation for single thread applications. All caches perform a best-effort bounding of a hash map using an entry replacement algorithm to determine which entries to evict when the capacity is exceeded.
+The goal is simple: **be the fastest single-threaded cache in Rust**.
+
+```rust
+use micro_moka::unsync::Cache;
+
+let mut cache = Cache::new(10_000);
+cache.insert("key", "value");
+assert_eq!(cache.get(&"key"), Some(&"value"));
+```
+
+## Why Micro Moka?
+
+**W-TinyLFU is a better eviction policy.** Standard LRU caches are vulnerable to scan pollution -- a single sequential scan can flush the entire cache. W-TinyLFU uses a frequency sketch (Count-Min Sketch with 4-bit counters) to admit only entries that are likely to be accessed again, producing significantly higher hit ratios on real-world workloads compared to LRU, FIFO, or CLOCK.
+
+**Minimal overhead.** Two production dependencies (`hashbrown`, `triomphe`). No allocator, no async runtime, no parking lot. Compiles fast, produces small binaries.
+
+**Single-threaded by design.** No `Arc`, no `Mutex`, no atomic operations. If your cache lives on one thread -- CLI tools, WASM, game loops, compilers, single-threaded servers -- you pay zero synchronization cost.
+
+## Installation
+
+```toml
+[dependencies]
+micro-moka = "0.1"
+```
+
+## Usage
+
+```rust
+use micro_moka::unsync::Cache;
+
+// Create with capacity
+let mut cache: Cache<&str, i32> = Cache::new(1_000);
+
+// Or use the builder
+let mut cache: Cache<&str, i32> = Cache::builder()
+    .max_capacity(1_000)
+    .initial_capacity(100)
+    .build();
+
+// Insert and retrieve
+cache.insert("key", 42);
+assert_eq!(cache.get(&"key"), Some(&42));
+
+// Check membership
+assert!(cache.contains_key(&"key"));
+
+// Remove entries
+cache.invalidate(&"key");
+let removed = cache.remove(&"other_key"); // returns Option<V>
+
+// Bulk invalidation
+cache.invalidate_entries_if(|_key, value| *value < 10);
+cache.invalidate_all();
+
+// Inspection
+let count = cache.entry_count();
+let policy = cache.policy();
+println!("max capacity: {:?}", policy.max_capacity());
+
+// Iteration (does not update access order)
+for (key, value) in cache.iter() {
+    println!("{}: {}", key, value);
+}
+```
+
+### Custom Hashers
+
+The default hasher is `RandomState` (SipHash). For cache-heavy workloads, a faster hasher like [aHash][ahash] can improve throughput substantially:
+
+```rust,ignore
+use micro_moka::unsync::Cache;
+
+let mut cache: Cache<String, String, ahash::RandomState> = Cache::builder()
+    .max_capacity(10_000)
+    .build_with_hasher(ahash::RandomState::default());
+```
+
+## How W-TinyLFU Works
+
+On every cache access, a probabilistic frequency counter (Count-Min Sketch) records how often keys are requested. When the cache is full and a new entry arrives:
+
+1. The **candidate** (new entry) is compared against **victims** (least-recently-used entries from the eviction queue)
+2. If the candidate's estimated frequency exceeds the victims', it is admitted and the victims are evicted
+3. If not, the candidate is rejected -- preventing low-frequency entries from displacing popular ones
+
+The frequency sketch uses 4-bit counters with periodic aging (halved when a sample threshold is reached), keeping memory usage bounded regardless of the key universe size. The sketch is only enabled once the cache reaches 50% capacity, avoiding overhead during warmup.
+
+## What Was Removed from Mini Moka
+
+| Feature | Rationale |
+|---------|-----------|
+| `sync` module (concurrent cache) | Eliminates `DashMap`, locks, atomics |
+| Async support | No runtime dependency |
+| Weight-based eviction (`Weigher`) | All entries cost 1 slot; simpler admission |
+| TTL / TTI expiration | No timer overhead; entries live until evicted or invalidated |
+| `smallvec`, `tagptr` dependencies | Simplified internals |
+
+## Minimum Supported Rust Version
+
+| Feature | MSRV |
+|---------|------|
+| Default | Rust 1.76.0 (Feb 8, 2024) |
+
+MSRV follows a rolling 6-month policy. Bumping MSRV is not considered a semver-breaking change.
+
+## Development
+
+```bash
+# All tests (including compile-fail and doc tests)
+RUSTFLAGS='--cfg trybuild' cargo test --all-features
+
+# Clippy (CI treats warnings as errors)
+cargo clippy --lib --tests --all-features --all-targets -- -D warnings
+
+# Format
+cargo fmt --all -- --check
+
+# Docs (nightly)
+cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' doc --no-deps
+
+# Miri (verify unsafe deque code)
+cargo +nightly miri test deque
+```
+
+## Releases
+
+Automated on merge to `main`. See [RELEASING.md](./RELEASING.md) for details.
+
+## Credits
+
+Architecture inspired by [Caffeine][caffeine-git] for Java. Thanks to Ben Manes and all Caffeine contributors.
+
+Forked from [Mini Moka][mini-moka-git] by Tatsuya Kawano and the Moka contributors.
+
+## License
+
+MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
 
 [gh-actions-badge]: https://github.com/user1303836/micro-moka/actions/workflows/CI.yml/badge.svg
 [release-badge]: https://img.shields.io/crates/v/micro-moka.svg
 [docs-badge]: https://docs.rs/micro-moka/badge.svg
 [license-badge]: https://img.shields.io/crates/l/micro-moka.svg
-
-<!-- [fossa-badge]: https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmini-moka.svg?type=shield -->
-
 [gh-actions]: https://github.com/user1303836/micro-moka/actions?query=workflow%3ACI
 [crate]: https://crates.io/crates/micro-moka
 [docs]: https://docs.rs/micro-moka
-[deps-rs]: https://deps.rs/repo/github/user1303836/micro-moka
-[moka-git]: https://github.com/moka-rs/moka
 [mini-moka-git]: https://github.com/moka-rs/mini-moka
 [caffeine-git]: https://github.com/ben-manes/caffeine
-
-## Key Features
-
-- **Minimal Footprint:** Stripped of all async, concurrent, and heavy logic. Ideal for CLIs, WASM, and environments where binary size matters.
-- **Tiny Dependency Tree:** Minimal dependencies (`smallvec`, `tagptr`, `triomphe`). No `parking_lot` or async runtimes.
-- **Smart Eviction:** Uses W-TinyLFU (LFU admission + LRU eviction) to maintain a near-optimal hit ratio, significantly outperforming standard LRU caches.
-- **Bounded Capacity:** Caches are strictly bounded by a maximum number of entries.
-
-<!--
-Mini Moka provides a rich and flexible feature set while maintaining high hit ratio
-and a high level of concurrency for concurrent access. However, it may not be as fast
-as other caches, especially those that focus on much smaller feature sets.
-
-If you do not need features like: time to live, and size aware eviction, you may want
-to take a look at the [Quick Cache][quick-cache] crate.
--->
-
 [tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
-
-<!-- [quick-cache]: https://crates.io/crates/quick_cache -->
-
-## Change Log
-
-- [CHANGELOG.md](./CHANGELOG.md)
-
-## Table of Contents
-
-- [Micro Moka](#micro-moka)
-  - [Features](#features)
-  - [Change Log](#change-log)
-  - [Table of Contents](#table-of-contents)
-  - [Usage](#usage)
-  - [Example: Basic Usage](#example-basic-usage)
-  - [Minimum Supported Rust Versions](#minimum-supported-rust-versions)
-  - [Developing Micro Moka](#developing-micro-moka)
-  - [Releasing](#releasing)
-  - [Credits](#credits)
-    - [Caffeine](#caffeine)
-  - [License](#license)
-
-## Usage
-
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-micro_moka = "0.1"
-```
-
-## Example: Basic Usage
-
-Cache entries are manually added using `insert` method, and are stored in the cache
-until either evicted or manually invalidated.
-
-```rust
-use micro_moka::unsync::Cache;
-
-fn main() {
-    // Create a cache that can store up to 10,000 entries.
-    let mut cache = Cache::new(10_000);
-
-    // Insert an entry.
-    cache.insert("my_key", "my_value");
-
-    // Get the entry.
-    // get() returns Option<&V>, a reference to the stored value.
-    if let Some(value) = cache.get(&"my_key") {
-        println!("value: {}", value);
-    }
-
-    // Invalidate the entry.
-    cache.invalidate(&"my_key");
-}
-```
-
-## Minimum Supported Rust Versions
-
-Micro Moka's minimum supported Rust versions (MSRV) are the followings:
-
-| Feature          |           MSRV            |
-| :--------------- | :-----------------------: |
-| default features | Rust 1.76.0 (Feb 8, 2024) |
-
-It will keep a rolling MSRV policy of at least 6 months. If only the default features
-are enabled, MSRV will be updated conservatively. When using other features, MSRV
-might be updated more frequently, up to the latest stable. In both cases, increasing
-MSRV is _not_ considered a semver-breaking change.
-
-## Developing Micro Moka
-
-**Running All Tests**
-
-To run all tests including doc tests on the README, use the following command:
-
-```console
-$ RUSTFLAGS='--cfg trybuild' cargo test --all-features
-```
-
-**Generating the Doc**
-
-```console
-$ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' \
-    doc --no-deps
-```
-
-## Releasing
-
-Releases are automated from merges into `main`.
-
-- See [RELEASING.md](./RELEASING.md) for one-time setup.
-- Every PR to `main` must bump `Cargo.toml` version and add the matching changelog section.
-- On merge, GitHub Actions publishes to crates.io, creates `v<version>` tag, and creates a GitHub release.
-
-## Credits
-
-### Caffeine
-
-Micro Moka's architecture is heavily inspired by the [Caffeine][caffeine-git] library
-for Java. Thanks go to Ben Manes and all contributors of Caffeine.
-
-## License
-
-Micro Moka is distributed under either of
-
-- The MIT license
-- The Apache License (Version 2.0)
-
-at your option.
-
-See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
+[ahash]: https://crates.io/crates/ahash
