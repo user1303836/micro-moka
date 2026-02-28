@@ -1085,4 +1085,18 @@ mod tests {
         assert_eq!(cache.peek(&"c"), Some(&"cindy"));
         assert_eq!(cache.peek(&"d"), Some(&"david"));
     }
+
+    #[test]
+    fn contains_key_with_shared_reference() {
+        let mut cache = Cache::new(10);
+        cache.insert("a", 1);
+        cache.insert("b", 2);
+        cache.insert("c", 3);
+
+        let cache_ref: &Cache<&str, i32> = &cache;
+        assert!(cache_ref.contains_key(&"a"));
+        assert!(cache_ref.contains_key(&"b"));
+        assert!(cache_ref.contains_key(&"c"));
+        assert!(!cache_ref.contains_key(&"d"));
+    }
 }
