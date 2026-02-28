@@ -1,6 +1,6 @@
 [package]
 name = "micro-moka"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2018"
 rust-version = "1.76"
 
@@ -30,6 +30,14 @@ trybuild = "1.0.103"
 # Build the doc with some features enabled.
 features = []
 rustdoc-args = ["--cfg", "docsrs"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
+lto = true
+codegen-units = 1
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
