@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-02-28
+
+### Changed
+
+- Eliminated redundant HashMap lookups in `insert()` by using the Entry API to carry entry references through from the initial `raw_entry_mut()` call. Update operations and sub-capacity inserts now perform a single lookup instead of two. Removed `handle_update()` (inlined into the `Occupied` match arm) and replaced `handle_insert()` with a focused `handle_admission()` for the rare at-capacity path.
+
 ## [0.1.10] - 2026-02-28
 
 ### Changed

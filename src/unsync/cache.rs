@@ -265,27 +265,46 @@ where
         if weights_to_evict > 0 {
             self.evict_lru_entries(weights_to_evict);
         }
-        let policy_weight = 1;
         let key = Rc::new(key);
         let hash = self.hash(&key);
+        let has_free_space = self.has_enough_capacity(1, self.entry_count);
         let entry = ValueEntry::new(value);
 
-        let old_entry = match self
+        let needs_admission = match self
             .cache
             .raw_entry_mut()
             .from_key_hashed_nocheck(hash, &key)
         {
-            RawEntryMut::Occupied(mut o) => Some(std::mem::replace(o.get_mut(), entry)),
+            RawEntryMut::Occupied(mut o) => {
+                let old_entry = std::mem::replace(o.get_mut(), entry);
+                let new_entry = o.into_mut();
+                new_entry.replace_deq_nodes_with(old_entry);
+                self.deques.move_to_back_ao(new_entry);
+                false
+            }
             RawEntryMut::Vacant(v) => {
-                v.insert_hashed_nocheck(hash, Rc::clone(&key), entry);
-                None
+                if has_free_space {
+                    let (_, new_entry) =
+                        v.insert_hashed_nocheck(hash, Rc::clone(&key), entry);
+                    self.deques.push_back_ao(
+                        KeyHashDate::new(Rc::clone(&key), hash),
+                        new_entry,
+                    );
+                    self.entry_count += 1;
+
+                    if self.should_enable_frequency_sketch() {
+                        self.enable_frequency_sketch();
+                    }
+                    false
+                } else {
+                    v.insert_hashed_nocheck(hash, Rc::clone(&key), entry);
+                    true
+                }
             }
         };
 
-        if let Some(old_entry) = old_entry {
-            self.handle_update(key, hash, policy_weight, old_entry);
-        } else {
-            self.handle_insert(key, hash, policy_weight);
+        if needs_admission {
+            self.handle_admission(key, hash);
         }
     }
 
@@ -487,39 +506,18 @@ where
         self.frequency_sketch_enabled = true;
     }
 
-    #[inline]
-    fn handle_insert(&mut self, key: Rc<K>, hash: u64, policy_weight: u32) {
-        debug_assert_eq!(policy_weight, 1);
-        let has_free_space = self.has_enough_capacity(policy_weight, self.entry_count);
-        let (cache, deqs, freq) = (&mut self.cache, &mut self.deques, &self.frequency_sketch);
-
-        if has_free_space {
-            let key = Rc::clone(&key);
-            let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
-                RawEntryMut::Occupied(o) => o.into_mut(),
-                RawEntryMut::Vacant(_) => unreachable!(),
-            };
-            deqs.push_back_ao(
-                KeyHashDate::new(Rc::clone(&key), hash),
-                entry,
-            );
-            self.entry_count += 1;
-
-            if self.should_enable_frequency_sketch() {
-                self.enable_frequency_sketch();
-            }
-
-            return;
-        }
-
+    #[cold]
+    #[inline(never)]
+    fn handle_admission(&mut self, key: Rc<K>, hash: u64) {
         if let Some(max) = self.max_capacity {
-            if policy_weight as u64 > max {
-                cache.remove(&Rc::clone(&key));
+            if max == 0 {
+                self.cache.remove(&key);
                 return;
             }
         }
 
-        let candidate_freq = freq.frequency(hash);
+        let candidate_freq = self.frequency_sketch.frequency(hash);
+        let (cache, deqs, freq) = (&mut self.cache, &mut self.deques, &self.frequency_sketch);
 
         match Self::admit(candidate_freq, deqs, freq) {
             AdmissionResult::Admitted { victim_node } => {
@@ -533,7 +531,6 @@ where
                     RawEntryMut::Occupied(o) => o.into_mut(),
                     RawEntryMut::Vacant(_) => unreachable!(),
                 };
-                let key = Rc::clone(&key);
                 deqs.push_back_ao(
                     KeyHashDate::new(Rc::clone(&key), hash),
                     entry,
@@ -576,24 +573,6 @@ where
         } else {
             AdmissionResult::Rejected
         }
-    }
-
-    #[inline]
-    fn handle_update(
-        &mut self,
-        key: Rc<K>,
-        hash: u64,
-        policy_weight: u32,
-        old_entry: ValueEntry<K, V>,
-    ) {
-        let (cache, deqs) = (&mut self.cache, &mut self.deques);
-        let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
-            RawEntryMut::Occupied(o) => o.into_mut(),
-            RawEntryMut::Vacant(_) => unreachable!(),
-        };
-        entry.replace_deq_nodes_with(old_entry);
-        entry.set_policy_weight(policy_weight);
-        deqs.move_to_back_ao(entry);
     }
 
     #[cold]

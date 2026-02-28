@@ -74,8 +74,4 @@ impl<K, V> ValueEntry<K, V> {
         1
     }
 
-    #[inline]
-    pub(crate) fn set_policy_weight(&mut self, _policy_weight: u32) {
-        // No-op
-    }
 }
