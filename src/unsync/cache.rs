@@ -235,9 +235,9 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.frequency_sketch.increment(self.hash(key));
-
+        let hash = self.hash(key);
         if let Some(entry) = self.cache.get_mut(key) {
+            self.frequency_sketch.increment(hash);
             Self::record_hit(&mut self.deques, entry);
             Some(&entry.value)
         } else {
@@ -646,30 +646,47 @@ mod tests {
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
-        // counts: a -> 1, b -> 1
+        // freq: a=1, b=1
 
         cache.insert("c", "cindy");
         assert_eq!(cache.get(&"c"), Some(&"cindy"));
         assert!(cache.contains_key(&"c"));
-        // counts: a -> 1, b -> 1, c -> 1
+        // freq: a=1, b=1, c=1
 
         assert!(cache.contains_key(&"a"));
         assert_eq!(cache.get(&"a"), Some(&"alice"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
         assert!(cache.contains_key(&"b"));
-        // counts: a -> 2, b -> 2, c -> 1
+        // freq: a=2, b=2, c=1
+        // probation: [c, a, b] — c is LRU
 
-        // "d" should not be admitted because its frequency is too low.
-        cache.insert("d", "david"); //   count: d -> 0
-        assert_eq!(cache.get(&"d"), None); //   d -> 1
+        // "d" should not be admitted because its frequency (0) is lower
+        // than victim "c"'s frequency (1).
+        cache.insert("d", "david");
+        assert_eq!(cache.get(&"d"), None);
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", "david");
         assert!(!cache.contains_key(&"d"));
-        assert_eq!(cache.get(&"d"), None); //   d -> 2
+        assert_eq!(cache.get(&"d"), None);
+
+        // Build frequency for "d" through actual cache hits by temporarily
+        // making room in the cache.
+        cache.invalidate(&"c");
+        cache.insert("d", "david");
+        assert_eq!(cache.get(&"d"), Some(&"david")); // d freq -> 1
+        assert_eq!(cache.get(&"d"), Some(&"david")); // d freq -> 2
+        cache.invalidate(&"d");
+        cache.insert("c", "cindy");
+        // freq: a=2, b=2, c=1, d=2. probation: [a, b, c]
+
+        // Move a and b to back so c becomes the LRU victim at the front.
+        assert_eq!(cache.get(&"a"), Some(&"alice"));
+        assert_eq!(cache.get(&"b"), Some(&"bob"));
+        // probation: [c, a, b]. victim c freq=1, candidate d freq=2.
 
         // "d" should be admitted and "c" should be evicted
-        // because d's frequency is higher than c's.
+        // because d's frequency (2) exceeds c's frequency (1).
         cache.insert("d", "dennis");
         assert_eq!(cache.get(&"a"), Some(&"alice"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
@@ -941,6 +958,27 @@ mod tests {
         );
         assert_eq!(cache.entry_count(), 1);
         assert!(cache.contains_key(&4));
+    }
+
+    #[test]
+    fn frequency_sketch_only_increments_on_hit() {
+        let mut cache = Cache::new(100);
+        cache.enable_frequency_sketch_for_testing();
+
+        let miss_key = "missing";
+        for _ in 0..10 {
+            assert_eq!(cache.get(&miss_key), None);
+        }
+        let miss_hash = cache.hash(&miss_key);
+        assert_eq!(cache.frequency_sketch.frequency(miss_hash), 0);
+
+        let hit_key = "present";
+        cache.insert(hit_key, "value");
+        for _ in 0..5 {
+            assert_eq!(cache.get(&hit_key), Some(&"value"));
+        }
+        let hit_hash = cache.hash(&hit_key);
+        assert_eq!(cache.frequency_sketch.frequency(hit_hash), 5);
     }
 
     #[test]
