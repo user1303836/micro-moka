@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-02-28
+
+### Changed
+
+- Replaced three-deque `Deques<K>` struct (window, probation, protected) with a single `Deque<KeyHashDate<K>>`, eliminating ~80 bytes of unused deque overhead per cache instance.
+- Removed `CacheRegion` enum and all tagged-pointer (`TagNonNull`) dispatch from access-order operations, simplifying every cache hit/insert/evict path.
+- Removed `#[repr(align(4))]` from `DeqNode` now that 2-bit tag encoding is no longer needed.
+- Removed `tagptr` dependency.
+- Eliminated redundant hash computations in cache operations by switching to `hashbrown::HashMap` and using its `raw_entry` API to compute each key's hash exactly once per `get()` or `insert()` call, instead of 2-3 times.
+
 ## [0.1.6] - 2026-02-27
 
 ### Fixed

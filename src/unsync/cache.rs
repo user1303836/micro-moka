@@ -1,12 +1,14 @@
 use super::{deques::Deques, CacheBuilder, Iter, KeyHashDate, ValueEntry};
 use crate::{
-    common::{self, deque::DeqNode, frequency_sketch::FrequencySketch, CacheRegion},
+    common::{self, deque::DeqNode, frequency_sketch::FrequencySketch},
     Policy,
 };
 
+use hashbrown::hash_map::RawEntryMut;
+use hashbrown::HashMap;
 use std::{
     borrow::Borrow,
-    collections::{hash_map::RandomState, HashMap},
+    collections::hash_map::RandomState,
     fmt,
     hash::{BuildHasher, Hash},
     ptr::NonNull,
@@ -15,16 +17,16 @@ use std::{
 
 const EVICTION_BATCH_SIZE: usize = 100;
 
-type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>;
+type CacheStore<K, V, S> = HashMap<Rc<K>, ValueEntry<K, V>, S>;
 
 /// An in-memory cache that is _not_ thread-safe.
 ///
-/// `Cache` utilizes a hash table [`std::collections::HashMap`][std-hashmap] from the
-/// standard library for the central key-value storage. `Cache` performs a
-/// best-effort bounding of the map using an entry replacement algorithm to determine
-/// which entries to evict when the capacity is exceeded.
+/// `Cache` utilizes a hash table [`hashbrown::HashMap`][hb-hashmap] for the
+/// central key-value storage. `Cache` performs a best-effort bounding of the
+/// map using an entry replacement algorithm to determine which entries to evict
+/// when the capacity is exceeded.
 ///
-/// [std-hashmap]: https://doc.rust-lang.org/std/collections/struct.HashMap.html
+/// [hb-hashmap]: https://docs.rs/hashbrown/latest/hashbrown/struct.HashMap.html
 ///
 /// # Characteristic difference between `unsync` and `sync`/`future` caches
 ///
@@ -235,13 +237,20 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.frequency_sketch.increment(self.hash(key));
+        let hash = self.hash(key);
+        self.frequency_sketch.increment(hash);
 
-        if let Some(entry) = self.cache.get_mut(key) {
-            Self::record_hit(&mut self.deques, entry);
-            Some(&entry.value)
-        } else {
-            None
+        match self
+            .cache
+            .raw_entry_mut()
+            .from_key_hashed_nocheck(hash, key)
+        {
+            RawEntryMut::Occupied(o) => {
+                let entry = o.into_mut();
+                Self::record_hit(&mut self.deques, entry);
+                Some(&entry.value)
+            }
+            RawEntryMut::Vacant(_) => None,
         }
     }
 
@@ -252,12 +261,24 @@ where
         self.evict_lru_entries();
         let policy_weight = 1;
         let key = Rc::new(key);
+        let hash = self.hash(&key);
         let entry = ValueEntry::new(value);
 
-        if let Some(old_entry) = self.cache.insert(Rc::clone(&key), entry) {
-            self.handle_update(key, policy_weight, old_entry);
+        let old_entry = match self
+            .cache
+            .raw_entry_mut()
+            .from_key_hashed_nocheck(hash, &key)
+        {
+            RawEntryMut::Occupied(mut o) => Some(std::mem::replace(o.get_mut(), entry)),
+            RawEntryMut::Vacant(v) => {
+                v.insert_hashed_nocheck(hash, Rc::clone(&key), entry);
+                None
+            }
+        };
+
+        if let Some(old_entry) = old_entry {
+            self.handle_update(key, hash, policy_weight, old_entry);
         } else {
-            let hash = self.hash(&key);
             self.handle_insert(key, hash, policy_weight);
         }
     }
@@ -462,16 +483,16 @@ where
         let (cache, deqs, freq) = (&mut self.cache, &mut self.deques, &self.frequency_sketch);
 
         if has_free_space {
-            // Add the candidate to the deque.
             let key = Rc::clone(&key);
-            let entry = cache.get_mut(&key).unwrap();
+            let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
+                RawEntryMut::Occupied(o) => o.into_mut(),
+                RawEntryMut::Vacant(_) => unreachable!(),
+            };
             deqs.push_back_ao(
-                CacheRegion::MainProbation,
                 KeyHashDate::new(Rc::clone(&key), hash),
                 entry,
             );
             self.entry_count += 1;
-            // self.saturating_add_to_total_weight(policy_weight as u64);
 
             if self.should_enable_frequency_sketch() {
                 self.enable_frequency_sketch();
@@ -482,7 +503,6 @@ where
 
         if let Some(max) = self.max_capacity {
             if policy_weight as u64 > max {
-                // The candidate is too big to fit in the cache. Reject it.
                 cache.remove(&Rc::clone(&key));
                 return;
             }
@@ -492,32 +512,29 @@ where
 
         match Self::admit(candidate_freq, deqs, freq) {
             AdmissionResult::Admitted { victim_node } => {
-                // Remove the victim from the hash map and deque.
                 let mut vic_entry = cache
                     .remove(unsafe { &victim_node.as_ref().element.key })
                     .expect("Cannot remove a victim from the hash map");
                 deqs.unlink_ao(&mut vic_entry);
                 self.entry_count -= 1;
 
-                // Add the candidate to the deque.
-                let entry = cache.get_mut(&key).unwrap();
+                let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
+                    RawEntryMut::Occupied(o) => o.into_mut(),
+                    RawEntryMut::Vacant(_) => unreachable!(),
+                };
                 let key = Rc::clone(&key);
                 deqs.push_back_ao(
-                    CacheRegion::MainProbation,
                     KeyHashDate::new(Rc::clone(&key), hash),
                     entry,
                 );
 
                 self.entry_count += 1;
-                // Self::saturating_sub_from_total_weight(self, victims_weight);
-                // Self::saturating_add_to_total_weight(self, policy_weight as u64);
 
                 if self.should_enable_frequency_sketch() {
                     self.enable_frequency_sketch();
                 }
             }
             AdmissionResult::Rejected => {
-                // Remove the candidate from the cache.
                 cache.remove(&key);
             }
         }
@@ -534,7 +551,7 @@ where
     ///
     #[inline]
     fn admit(candidate_freq: u8, deqs: &Deques<K>, freq: &FrequencySketch) -> AdmissionResult<K> {
-        let Some(victim_node) = deqs.probation.peek_front_ptr() else {
+        let Some(victim_node) = deqs.deque.peek_front_ptr() else {
             return AdmissionResult::Rejected;
         };
         let victim_hash = unsafe { victim_node.as_ref() }.element.hash;
@@ -550,39 +567,40 @@ where
         }
     }
 
-    fn handle_update(&mut self, key: Rc<K>, policy_weight: u32, old_entry: ValueEntry<K, V>) {
-        let entry = self.cache.get_mut(&key).unwrap();
+    fn handle_update(
+        &mut self,
+        key: Rc<K>,
+        hash: u64,
+        policy_weight: u32,
+        old_entry: ValueEntry<K, V>,
+    ) {
+        let (cache, deqs) = (&mut self.cache, &mut self.deques);
+        let entry = match cache.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
+            RawEntryMut::Occupied(o) => o.into_mut(),
+            RawEntryMut::Vacant(_) => unreachable!(),
+        };
         entry.replace_deq_nodes_with(old_entry);
         entry.set_policy_weight(policy_weight);
-
-        let deqs = &mut self.deques;
         deqs.move_to_back_ao(entry);
-
-        // self.saturating_sub_from_total_weight(old_policy_weight as u64);
-        // self.saturating_add_to_total_weight(policy_weight as u64);
     }
 
     #[inline]
     fn evict_lru_entries(&mut self) {
-        const DEQ_NAME: &str = "probation";
-
         let weights_to_evict = self.weights_to_evict();
         let mut evicted_count = 0u64;
         let mut evicted_policy_weight = 0u64;
 
         {
             let deqs = &mut self.deques;
-            let (probation, cache) = (&mut deqs.probation, &mut self.cache);
+            let (deque, cache) = (&mut deqs.deque, &mut self.cache);
 
             for _ in 0..EVICTION_BATCH_SIZE {
                 if evicted_policy_weight >= weights_to_evict {
                     break;
                 }
 
-                // clippy::map_clone will give us a false positive warning here.
-                // Version: clippy 0.1.77 (f2048098a1c 2024-02-09) in Rust 1.77.0-beta.2
                 #[allow(clippy::map_clone)]
-                let key = probation
+                let key = deque
                     .peek_front()
                     .map(|node| Rc::clone(&node.element.key));
 
@@ -593,17 +611,16 @@ where
 
                 if let Some(mut entry) = cache.remove(&key) {
                     let weight = entry.policy_weight();
-                    Deques::unlink_ao_from_deque(DEQ_NAME, probation, &mut entry);
+                    Deques::unlink_ao_from_deque(deque, &mut entry);
                     evicted_count += 1;
                     evicted_policy_weight = evicted_policy_weight.saturating_add(weight as u64);
                 } else {
-                    probation.pop_front();
+                    deque.pop_front();
                 }
             }
         }
 
         self.entry_count -= evicted_count;
-        // self.saturating_sub_from_total_weight(evicted_policy_weight);
     }
 }
 

@@ -2,7 +2,7 @@ use super::{Cache, ValueEntry};
 
 use std::{hash::Hash, rc::Rc};
 
-type HashMapIter<'i, K, V> = std::collections::hash_map::Iter<'i, Rc<K>, ValueEntry<K, V>>;
+type HashMapIter<'i, K, V> = hashbrown::hash_map::Iter<'i, Rc<K>, ValueEntry<K, V>>;
 
 pub struct Iter<'i, K, V> {
     iter: HashMapIter<'i, K, V>,
