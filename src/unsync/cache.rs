@@ -220,6 +220,7 @@ where
     ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
+    #[inline]
     pub fn contains_key<Q>(&mut self, key: &Q) -> bool
     where
         Rc<K>: Borrow<Q>,
@@ -232,6 +233,7 @@ where
     ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
+    #[inline]
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         Rc<K>: Borrow<Q>,
@@ -257,6 +259,7 @@ where
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
+    #[inline]
     pub fn insert(&mut self, key: K, value: V) {
         let weights_to_evict = self.weights_to_evict();
         if weights_to_evict > 0 {
@@ -290,6 +293,7 @@ where
     ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
+    #[inline]
     pub fn invalidate<Q>(&mut self, key: &Q)
     where
         Rc<K>: Borrow<Q>,
@@ -305,6 +309,7 @@ where
     ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
+    #[inline]
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         Rc<K>: Borrow<Q>,
@@ -324,6 +329,8 @@ where
     /// Like the `invalidate` method, this method does not clear the historic
     /// popularity estimator of keys so that it retains the client activities of
     /// trying to retrieve an item.
+    #[cold]
+    #[inline(never)]
     pub fn invalidate_all(&mut self) {
         // Phase 1: swap out the cache before resetting internal state so that
         // a panic in V::drop leaves `self` in a consistent (empty) state.
@@ -356,6 +363,8 @@ where
     // We need this #[allow(...)] to avoid a false Clippy warning about needless
     // collect to create keys_to_invalidate.
     // clippy 0.1.52 (9a1dfd2dc5c 2021-04-30) in Rust 1.52.0-beta.7
+    #[cold]
+    #[inline(never)]
     #[allow(clippy::needless_collect)]
     pub fn invalidate_entries_if(&mut self, mut predicate: impl FnMut(&K, &V) -> bool) {
         let Self { cache, deques, .. } = self;
@@ -427,16 +436,19 @@ where
         self.build_hasher.hash_one(key)
     }
 
+    #[inline]
     fn record_hit(deques: &mut Deques<K>, entry: &mut ValueEntry<K, V>) {
         deques.move_to_back_ao(entry)
     }
 
+    #[inline]
     fn has_enough_capacity(&self, candidate_weight: u32, ws: u64) -> bool {
         self.max_capacity
             .map(|limit| ws + candidate_weight as u64 <= limit)
             .unwrap_or(true)
     }
 
+    #[inline]
     fn weights_to_evict(&self) -> u64 {
         self.max_capacity
             .map(|limit| self.entry_count.saturating_sub(limit))
@@ -566,6 +578,7 @@ where
         }
     }
 
+    #[inline]
     fn handle_update(
         &mut self,
         key: Rc<K>,
