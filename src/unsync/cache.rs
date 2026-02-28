@@ -254,6 +254,43 @@ where
         Some(&self.slab.get(idx).value)
     }
 
+    /// Returns an immutable reference of the value corresponding to the key,
+    /// without updating the frequency sketch or deque position.
+    ///
+    /// Unlike [`get`](#method.get), this method does not count as a cache read
+    /// for eviction purposes: the entry's popularity estimate is unchanged and
+    /// its position in the LRU queue is not promoted. This is useful when you
+    /// want to inspect the cache without influencing which entries get evicted,
+    /// or when you only have a shared (`&self`) reference.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use micro_moka::unsync::Cache;
+    ///
+    /// let mut cache = Cache::new(100);
+    /// cache.insert("a", "alice");
+    ///
+    /// // peek() returns the value without affecting eviction order.
+    /// assert_eq!(cache.peek(&"a"), Some(&"alice"));
+    /// assert_eq!(cache.peek(&"missing"), None);
+    /// ```
+    #[inline]
+    pub fn peek<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.hash(key);
+        let idx = self
+            .table
+            .find(hash, |&idx| self.slab.get(idx).key.borrow() == key)?;
+        Some(&self.slab.get(*idx).value)
+    }
+
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
@@ -995,5 +1032,57 @@ mod tests {
         assert_eq!(cache.entry_count(), 1);
 
         assert_eq!(cache.get(&3), Some(&"c"));
+    }
+
+    #[test]
+    fn peek_returns_value() {
+        let mut cache = Cache::new(10);
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+
+        assert_eq!(cache.peek(&"a"), Some(&"alice"));
+        assert_eq!(cache.peek(&"b"), Some(&"bob"));
+    }
+
+    #[test]
+    fn peek_returns_none_for_missing_key() {
+        let cache = Cache::<&str, &str>::new(10);
+        assert_eq!(cache.peek(&"missing"), None);
+    }
+
+    #[test]
+    fn peek_does_not_promote() {
+        let mut cache = Cache::new(3);
+        cache.enable_frequency_sketch_for_testing();
+
+        // Insert three entries to fill the cache. Insertion order in deque: a, b, c.
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+
+        // Use get() on b and c to boost their frequency and promote them in the
+        // deque. "a" remains at the LRU front with a low frequency count.
+        for _ in 0..5 {
+            cache.get(&"b");
+            cache.get(&"c");
+        }
+
+        // peek() should return the value but NOT promote "a" or boost its frequency.
+        assert_eq!(cache.peek(&"a"), Some(&"alice"));
+
+        // Insert a new entry "d" with enough frequency to be admitted.
+        // Build up frequency for "d" before inserting.
+        let hash_d = cache.hash(&"d");
+        for _ in 0..5 {
+            cache.frequency_sketch.increment(hash_d);
+        }
+
+        // "a" should be the LRU victim since peek() did not promote it.
+        cache.insert("d", "david");
+
+        assert_eq!(cache.peek(&"a"), None, "a should have been evicted");
+        assert_eq!(cache.peek(&"b"), Some(&"bob"));
+        assert_eq!(cache.peek(&"c"), Some(&"cindy"));
+        assert_eq!(cache.peek(&"d"), Some(&"david"));
     }
 }
