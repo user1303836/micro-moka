@@ -111,6 +111,7 @@ impl FrequencySketch {
 
     /// Takes the hash value of an element, and returns the estimated number of
     /// occurrences of the element, up to the maximum (15).
+    #[inline]
     pub(crate) fn frequency(&self, hash: u64) -> u8 {
         if self.table.is_empty() {
             return 0;
@@ -132,6 +133,7 @@ impl FrequencySketch {
     /// elements will be periodically down sampled when the observed events
     /// exceeds a threshold. This process provides a frequency aging to allow
     /// expired long term entries to fade away.
+    #[inline]
     pub(crate) fn increment(&mut self, hash: u64) {
         if self.table.is_empty() {
             return;
@@ -155,6 +157,7 @@ impl FrequencySketch {
     /// Takes a table index (each entry has 16 counters) and counter index, and
     /// increments the counter by 1 if it is not already at the maximum value
     /// (15). Returns `true` if incremented.
+    #[inline]
     fn increment_at(&mut self, table_index: usize, counter_index: u8) -> bool {
         let offset = (counter_index as usize) << 2;
         let mask = 0xF_u64 << offset;
@@ -178,6 +181,7 @@ impl FrequencySketch {
     }
 
     /// Returns the table index for the counter at the specified depth.
+    #[inline]
     fn index_of(&self, hash: u64, depth: u8) -> usize {
         let i = depth as usize;
         let mut hash = hash.wrapping_add(SEED[i]).wrapping_mul(SEED[i]);
