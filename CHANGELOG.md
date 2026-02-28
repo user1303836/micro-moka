@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-02-28
+
+### Changed
+
+- Replaced `Rc<K>`-wrapped key storage and pointer-based doubly-linked deque with a slab-based index architecture (`Vec<Option<SlabEntry<K, V>>>` + `HashTable<u32>`), eliminating all reference counting, all `Box<DeqNode>` heap allocations, and all unsafe pointer manipulation.
+- Switched from `hashbrown::HashMap<Rc<K>, ValueEntry<K, V>>` to `hashbrown::HashTable<u32>` with slab indices, so keys live in a single contiguous location (the slab) with no duplication.
+- Embedded deque prev/next links as `u32` indices directly in slab entries, replacing the unsafe `NonNull<DeqNode>` linked list with simple index arithmetic.
+- Removed `triomphe` dependency (no longer needed without `Rc`/deque node allocations).
+- Removed `hashbrown` features `raw-entry` and `equivalent` (no longer needed with `HashTable`).
+- Improved `contains_key` to take `&self` instead of `&mut self`.
+
+### Removed
+
+- Removed `src/unsync/deques.rs` and `src/common/deque.rs` (replaced by inline `IndexDeque`).
+- Removed all `Rc<K>`, `NonNull`, `DeqNode`, `KeyHashDate`, `ValueEntry`, and `EntryInfo` types.
+
 ## [0.1.10] - 2026-02-28
 
 ### Changed
