@@ -43,6 +43,15 @@ impl<T> DeqNode<T> {
     pub(crate) fn next_node_ptr(this: NonNull<Self>) -> Option<NonNull<DeqNode<T>>> {
         unsafe { this.as_ref() }.next
     }
+
+    /// Returns the raw next pointer. Used by SIEVE to sweep forward through the
+    /// FIFO queue (from oldest toward newest).
+    ///
+    /// # Safety
+    /// The caller must ensure `self` is a valid, live node in a deque.
+    pub(crate) unsafe fn next_raw(&self) -> Option<NonNull<DeqNode<T>>> {
+        self.next
+    }
 }
 
 /// Cursor is used to remember the current iterating position.
@@ -122,12 +131,18 @@ impl<T> Deque<T> {
         false
     }
 
+    #[cfg(test)]
     pub(crate) fn peek_front(&self) -> Option<&DeqNode<T>> {
         self.head.as_ref().map(|node| unsafe { node.as_ref() })
     }
 
+    #[cfg(test)]
     pub(crate) fn peek_front_ptr(&self) -> Option<NonNull<DeqNode<T>>> {
         self.head.as_ref().cloned()
+    }
+
+    pub(crate) fn head_ptr(&self) -> Option<NonNull<DeqNode<T>>> {
+        self.head
     }
 
     /// Removes and returns the node at the front of the list.
@@ -182,6 +197,7 @@ impl<T> Deque<T> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) unsafe fn move_to_back(&mut self, mut node: NonNull<DeqNode<T>>) {
         debug_assert!(
             self.contains(node.as_ref()),
@@ -307,6 +323,7 @@ impl<T> Deque<T> {
         }
     }
 
+    #[cfg(test)]
     fn is_tail(&self, node: &DeqNode<T>) -> bool {
         if let Some(tail) = self.tail {
             std::ptr::eq(unsafe { tail.as_ref() }, node)

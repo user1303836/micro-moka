@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-02-28
+
+### Changed
+
+- Replaced W-TinyLFU admission/eviction policy with the SIEVE algorithm (NSDI 2024). SIEVE uses a single FIFO queue with a sweeping hand pointer and a 1-bit visited flag per entry, eliminating the FrequencySketch (Count-Min Sketch) and all frequency-based admission logic.
+- `get()` now sets a single visited bit instead of incrementing a frequency sketch and moving a deque node, reducing per-read overhead significantly.
+- `insert()` unconditionally adds new entries to the back of the FIFO queue instead of performing frequency-based admission decisions.
+- Eviction sweeps from the hand position: visited entries get their bit cleared, unvisited entries are evicted.
+- Removed `FrequencySketch`, `AdmissionResult`, `admit()`, `record_hit()`, and `sketch_capacity()`.
+
 ## [0.1.10] - 2026-02-28
 
 ### Changed

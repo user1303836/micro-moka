@@ -20,20 +20,10 @@ impl<K> Deques<K> {
         self.deque = Deque::new();
     }
 
-    pub(crate) fn push_back_ao<V>(
-        &mut self,
-        kh: KeyHashDate<K>,
-        entry: &mut ValueEntry<K, V>,
-    ) {
+    pub(crate) fn push_back_ao<V>(&mut self, kh: KeyHashDate<K>, entry: &mut ValueEntry<K, V>) {
         let node = Box::new(DeqNode::new(kh));
         let node = self.deque.push_back(node);
         entry.set_access_order_q_node(Some(node));
-    }
-
-    pub(crate) fn move_to_back_ao<V>(&mut self, entry: &ValueEntry<K, V>) {
-        if let Some(node) = entry.access_order_q_node() {
-            unsafe { self.deque.move_to_back(node) };
-        }
     }
 
     pub(crate) fn unlink_ao<V>(&mut self, entry: &mut ValueEntry<K, V>) {
@@ -55,11 +45,7 @@ impl<K> Deques<K> {
         unsafe { Self::unlink_node(&mut self.deque, node) };
     }
 
-    unsafe fn unlink_node(
-        deq: &mut Deque<KeyHashDate<K>>,
-        node: NonNull<DeqNode<KeyHashDate<K>>>,
-    ) {
-        // https://github.com/moka-rs/moka/issues/64
+    unsafe fn unlink_node(deq: &mut Deque<KeyHashDate<K>>, node: NonNull<DeqNode<KeyHashDate<K>>>) {
         deq.unlink_and_drop(node);
     }
 }

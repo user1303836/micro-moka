@@ -19,12 +19,11 @@ use crate::common::deque::DeqNode;
 
 pub(crate) struct KeyHashDate<K> {
     pub(crate) key: Rc<K>,
-    pub(crate) hash: u64,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(key: Rc<K>, hash: u64) -> Self {
-        Self { key, hash }
+    pub(crate) fn new(key: Rc<K>) -> Self {
+        Self { key }
     }
 }
 
@@ -32,6 +31,7 @@ type KeyDeqNodeAo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 
 struct EntryInfo<K> {
     access_order_q_node: Option<KeyDeqNodeAo<K>>,
+    visited: bool,
 }
 
 pub(crate) struct ValueEntry<K, V> {
@@ -45,13 +45,25 @@ impl<K, V> ValueEntry<K, V> {
             value,
             info: EntryInfo {
                 access_order_q_node: None,
+                visited: false,
             },
         }
     }
 
     #[inline]
+    pub(crate) fn set_visited(&mut self, visited: bool) {
+        self.info.visited = visited;
+    }
+
+    #[inline]
+    pub(crate) fn visited(&self) -> bool {
+        self.info.visited
+    }
+
+    #[inline]
     pub(crate) fn replace_deq_nodes_with(&mut self, mut other: Self) {
         self.info.access_order_q_node = other.info.access_order_q_node.take();
+        self.info.visited = other.info.visited;
     }
 
     #[inline]
@@ -67,15 +79,5 @@ impl<K, V> ValueEntry<K, V> {
     #[inline]
     pub(crate) fn take_access_order_q_node(&mut self) -> Option<KeyDeqNodeAo<K>> {
         self.info.access_order_q_node.take()
-    }
-
-    #[inline]
-    pub(crate) fn policy_weight(&self) -> u32 {
-        1
-    }
-
-    #[inline]
-    pub(crate) fn set_policy_weight(&mut self, _policy_weight: u32) {
-        // No-op
     }
 }
