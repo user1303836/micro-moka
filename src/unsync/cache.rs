@@ -1,7 +1,6 @@
 use super::{CacheBuilder, IndexDeque, Iter, Slab, SlabEntry, SENTINEL};
 use crate::Policy;
 
-use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
 use std::{
     borrow::Borrow,
@@ -288,6 +287,16 @@ where
     pub fn insert(&mut self, key: K, value: V) {
         let hash = self.hash(&key);
 
+        if let Some(&idx) = self
+            .table
+            .find(hash, |&idx| self.slab.get(idx).key.borrow() == &key)
+        {
+            let entry = self.slab.get_mut(idx);
+            entry.value = value;
+            entry.visited = true;
+            return;
+        }
+
         if !self.has_enough_capacity(1, self.entry_count) {
             if self.max_capacity == Some(0) {
                 return;
@@ -296,33 +305,22 @@ where
             self.sieve_evict_one();
         }
 
+        let slab_entry = SlabEntry {
+            key,
+            value,
+            hash,
+            visited: false,
+            prev: SENTINEL,
+            next: SENTINEL,
+        };
+        let idx = self.slab.allocate(slab_entry);
+
         let slab = &self.slab;
-        match self
-            .table
-            .entry(hash, |&idx| slab.get(idx).key == key, |&idx| {
-                slab.get(idx).hash
-            }) {
-            Entry::Occupied(oe) => {
-                let idx = *oe.get();
-                let entry = self.slab.get_mut(idx);
-                entry.value = value;
-                entry.visited = true;
-            }
-            Entry::Vacant(ve) => {
-                let slab_entry = SlabEntry {
-                    key,
-                    value,
-                    hash,
-                    visited: false,
-                    prev: SENTINEL,
-                    next: SENTINEL,
-                };
-                let idx = self.slab.allocate(slab_entry);
-                ve.insert(idx);
-                self.deque.push_back(&mut self.slab, idx);
-                self.entry_count += 1;
-            }
-        }
+        self.table
+            .insert_unique(hash, idx, |&existing_idx| slab.get(existing_idx).hash);
+
+        self.deque.push_back(&mut self.slab, idx);
+        self.entry_count += 1;
     }
 
     /// Discards any cached value for the key.
@@ -952,15 +950,14 @@ mod tests {
         cache.insert("b", "bob");
         cache.insert("c", "cindy");
 
-        // Update "a" with a new value. Because the Entry API requires
-        // eviction before the probe, updating at capacity speculatively
-        // evicts one entry. The value is still updated correctly.
+        // Update "a" with a new value. This should set visited=true but NOT
+        // move it to the back (SIEVE maintains insertion order).
         cache.insert("a", "anna");
         assert_eq!(cache.get(&"a"), Some(&"anna"));
-        assert_eq!(cache.entry_count(), 2);
+        assert_eq!(cache.entry_count(), 3);
 
-        // Insert "d": the cache has room (2/3) so no eviction needed.
-        // "a" remains because it was visited by the get() above.
+        // "b" and "c" are not visited. Insert "d" to trigger eviction.
+        // SIEVE should skip "a" (visited) and evict an unvisited entry.
         cache.insert("d", "david");
         assert_eq!(cache.entry_count(), 3);
         assert!(cache.contains_key(&"a"));
@@ -1001,30 +998,6 @@ mod tests {
         assert_eq!(cache.entry_count(), 2);
         assert!(cache.contains_key(&19));
         assert!(cache.contains_key(&18));
-    }
-
-    #[test]
-    fn speculative_eviction_self_corrects() {
-        let mut cache = Cache::new(3);
-
-        cache.insert("a", "alice");
-        cache.insert("b", "bob");
-        cache.insert("c", "cindy");
-        assert_eq!(cache.entry_count(), 3);
-
-        // Updating at capacity speculatively evicts one entry, dropping to 2.
-        cache.insert("a", "anna");
-        assert_eq!(cache.entry_count(), 2);
-        assert_eq!(cache.get(&"a"), Some(&"anna"));
-
-        // The next new-key insert fills the gap without another eviction.
-        cache.insert("d", "david");
-        assert_eq!(cache.entry_count(), 3);
-
-        // Another new-key insert at capacity triggers normal eviction.
-        cache.insert("e", "eve");
-        assert_eq!(cache.entry_count(), 3);
-        assert!(cache.contains_key(&"e"));
     }
 
     #[test]
