@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.22] - 2026-03-01
+
+### Added
+
+- Added `get_or_insert_with()` API that combines cache lookup and insertion into a single operation with one hash computation and one probe sequence, eliminating the redundant double-lookup when using separate `get()` then `insert()` calls. The closure is only called on cache miss. On hit, the entry is marked as visited for SIEVE eviction.
+
 ## [0.1.21] - 2026-03-01
 
 ### Changed
