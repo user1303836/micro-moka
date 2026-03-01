@@ -1,6 +1,6 @@
 [package]
 name = "micro-moka"
-version = "0.1.15"
+version = "0.1.16"
 edition = "2018"
 rust-version = "1.76"
 
@@ -28,6 +28,8 @@ hashlink = "0.11"
 mini-moka = "0.10"
 rand = "0.8"
 rand_distr = "0.4"
+half = ">=2.4, <2.5"
+ahash = "0.8.11"
 
 [[bench]]
 name = "throughput"
