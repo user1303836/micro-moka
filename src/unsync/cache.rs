@@ -999,4 +999,21 @@ mod tests {
         assert!(cache.contains_key(&19));
         assert!(cache.contains_key(&18));
     }
+
+    #[test]
+    fn update_below_capacity_no_eviction() {
+        let mut cache = Cache::new(5);
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+        assert_eq!(cache.entry_count(), 3);
+
+        // Updating below capacity should not evict anything.
+        cache.insert("b", "betty");
+        assert_eq!(cache.entry_count(), 3);
+        assert_eq!(cache.get(&"b"), Some(&"betty"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"c"));
+    }
 }

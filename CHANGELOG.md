@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-03-01
+
+### Changed
+
+- Replaced separate `find()` + `insert_unique()` double-probe on insert with a single `HashTable::entry()` call that walks the probe sequence once, eliminating a redundant slot-finding traversal on new-key inserts. Eviction is moved before the table probe so the `VacantEntry` borrow does not conflict with eviction's mutable access.
+
 ## [0.1.20] - 2026-03-01
 
 ### Changed
