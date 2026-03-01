@@ -97,7 +97,7 @@ The frequency sketch uses 4-bit counters with periodic aging (halved when a samp
 ## Benchmarks
 
 Measured with [criterion](https://crates.io/crates/criterion) 0.5 (LTO, 100 samples, fixed seed 42).
-Source: `benches/` directory. Reproduce with `cargo bench`.
+Source: `benches/` directory. Reproduce with `RUSTFLAGS='--cfg bench_deps' cargo bench`.
 
 ### Throughput (Mops/sec, higher is better)
 
@@ -163,6 +163,9 @@ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' 
 
 # Miri
 cargo +nightly miri test
+
+# Benchmarks
+RUSTFLAGS='--cfg bench_deps' cargo bench
 ```
 
 ## Releases
