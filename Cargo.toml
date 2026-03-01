@@ -29,6 +29,7 @@ hashlink = "0.11"
 mini-moka = "0.10"
 rand = "0.8"
 rand_distr = "0.4"
+ahash = "0.8.11"  # floor pin: 0.8.4 fails on nightly (removed stdsimd feature)
 
 [[bench]]
 name = "benchmark"
