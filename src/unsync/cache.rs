@@ -636,18 +636,18 @@ mod tests {
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
-        // counts: a -> 1, b -> 1
+        // counts: a -> 2, b -> 2
 
         cache.insert("c", "cindy");
         assert_eq!(cache.get(&"c"), Some(&"cindy"));
         assert!(cache.contains_key(&"c"));
-        // counts: a -> 1, b -> 1, c -> 1
+        // counts: a -> 2, b -> 2, c -> 2
 
         assert!(cache.contains_key(&"a"));
         assert_eq!(cache.get(&"a"), Some(&"alice"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
         assert!(cache.contains_key(&"b"));
-        // counts: a -> 2, b -> 2, c -> 1
+        // counts: a -> 3, b -> 3, c -> 2
 
         // "d" should not be admitted because its frequency is too low.
         // Each insert attempt increments d's frequency in the sketch.
