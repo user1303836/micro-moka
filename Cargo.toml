@@ -21,6 +21,21 @@ hashbrown = { version = "0.16", default-features = false, features = ["inline-mo
 anyhow = "1.0.19"
 getrandom = "0.2"
 once_cell = "1.7"
+criterion = { version = "0.5", features = ["html_reports"] }
+quick_cache = "0.6"
+lru = "0.12"
+hashlink = "0.11"
+mini-moka = "0.10"
+rand = "0.8"
+rand_distr = "0.4"
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "hit_ratio"
+harness = false
 
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0.103"
