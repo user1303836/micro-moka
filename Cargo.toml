@@ -1,6 +1,6 @@
 [package]
 name = "micro-moka"
-version = "0.1.21"
+version = "0.1.22"
 edition = "2018"
 rust-version = "1.76"
 

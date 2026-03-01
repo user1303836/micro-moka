@@ -280,6 +280,71 @@ where
         Some(&self.slab.get(*idx).value)
     }
 
+    /// Returns a reference to the value corresponding to the key, computing and
+    /// inserting it if not present.
+    ///
+    /// If the cache contains the key, the existing value is returned and the
+    /// entry is marked as visited. If the key is absent, `f` is called to
+    /// compute the value, which is then inserted and returned.
+    ///
+    /// This performs a single hash computation and a single probe sequence,
+    /// making it more efficient than a `get()` followed by `insert()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use micro_moka::unsync::Cache;
+    ///
+    /// let mut cache = Cache::new(100);
+    ///
+    /// let value = cache.get_or_insert_with("key", || "computed".to_string());
+    /// assert_eq!(value, "computed");
+    ///
+    /// // Second call returns the cached value without calling the closure.
+    /// let value = cache.get_or_insert_with("key", || panic!("should not be called"));
+    /// assert_eq!(value, "computed");
+    /// ```
+    #[inline]
+    pub fn get_or_insert_with<F>(&mut self, key: K, f: F) -> &V
+    where
+        F: FnOnce() -> V,
+    {
+        let hash = self.hash(&key);
+
+        if let Some(&idx) = self
+            .table
+            .find(hash, |&idx| self.slab.get(idx).key.borrow() == &key)
+        {
+            self.slab.get_mut(idx).visited = true;
+            return &self.slab.get(idx).value;
+        }
+
+        let value = f();
+
+        if !self.has_enough_capacity(1, self.entry_count) {
+            self.sieve_evict_one();
+        }
+
+        let slab_entry = SlabEntry {
+            key,
+            value,
+            hash,
+            visited: false,
+            prev: SENTINEL,
+            next: SENTINEL,
+        };
+        let idx = self.slab.allocate(slab_entry);
+
+        let slab = &self.slab;
+        self.table
+            .insert_unique(hash, idx, |&existing_idx| slab.get(existing_idx).hash);
+
+        self.deque.push_back(&mut self.slab, idx);
+        self.entry_count += 1;
+
+        &self.slab.get(idx).value
+    }
+
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
@@ -1015,5 +1080,129 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(&"betty"));
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"c"));
+    }
+
+    #[test]
+    fn get_or_insert_with_basic() {
+        let mut cache = Cache::new(10);
+
+        let v = cache.get_or_insert_with("a", || "alice");
+        assert_eq!(v, &"alice");
+        assert_eq!(cache.entry_count(), 1);
+
+        let v = cache.get_or_insert_with("a", || panic!("should not be called"));
+        assert_eq!(v, &"alice");
+        assert_eq!(cache.entry_count(), 1);
+    }
+
+    #[test]
+    fn get_or_insert_with_closure_called_only_on_miss() {
+        let mut cache = Cache::new(10);
+        let mut call_count = 0;
+
+        cache.get_or_insert_with("a", || {
+            call_count += 1;
+            "alice"
+        });
+        assert_eq!(call_count, 1);
+
+        cache.get_or_insert_with("a", || {
+            call_count += 1;
+            "anna"
+        });
+        assert_eq!(call_count, 1);
+
+        cache.get_or_insert_with("b", || {
+            call_count += 1;
+            "bob"
+        });
+        assert_eq!(call_count, 2);
+    }
+
+    #[test]
+    fn get_or_insert_with_eviction_at_capacity() {
+        let mut cache = Cache::new(3);
+
+        cache.get_or_insert_with("a", || "alice");
+        cache.get_or_insert_with("b", || "bob");
+        cache.get_or_insert_with("c", || "cindy");
+        assert_eq!(cache.entry_count(), 3);
+
+        cache.get_or_insert_with("d", || "david");
+        assert_eq!(cache.entry_count(), 3);
+        assert!(cache.contains_key(&"d"));
+    }
+
+    #[test]
+    fn get_or_insert_with_existing_key_no_closure() {
+        let mut cache = Cache::new(10);
+        cache.insert("a", "alice");
+
+        let v = cache.get_or_insert_with("a", || panic!("should not be called"));
+        assert_eq!(v, &"alice");
+        assert_eq!(cache.entry_count(), 1);
+    }
+
+    #[test]
+    fn get_or_insert_with_sets_visited_on_hit() {
+        let mut cache = Cache::new(3);
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+
+        // Hit via get_or_insert_with sets visited=true on "a".
+        cache.get_or_insert_with("a", || panic!("should not be called"));
+
+        // Insert "d" triggers eviction. SIEVE should skip "a" (visited)
+        // and evict an unvisited entry.
+        cache.insert("d", "david");
+        assert_eq!(cache.entry_count(), 3);
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"d"));
+    }
+
+    #[test]
+    fn get_or_insert_with_zero_capacity() {
+        let mut cache = Cache::new(0);
+
+        // Zero-capacity cache still stores the value (we must return &V).
+        let v = cache.get_or_insert_with("a", || "alice");
+        assert_eq!(v, &"alice");
+
+        // Same key: found in cache, closure not called.
+        let v = cache.get_or_insert_with("a", || panic!("should not be called"));
+        assert_eq!(v, &"alice");
+
+        // Different key: evicts "a", stores "b".
+        let v = cache.get_or_insert_with("b", || "bob");
+        assert_eq!(v, &"bob");
+        assert_eq!(cache.entry_count(), 1);
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+    }
+
+    #[test]
+    fn get_or_insert_with_after_invalidate() {
+        let mut cache = Cache::new(10);
+        cache.insert("a", "alice");
+        cache.invalidate(&"a");
+        assert_eq!(cache.entry_count(), 0);
+
+        let v = cache.get_or_insert_with("a", || "anna");
+        assert_eq!(v, &"anna");
+        assert_eq!(cache.entry_count(), 1);
+    }
+
+    #[test]
+    fn get_or_insert_with_after_remove() {
+        let mut cache = Cache::new(10);
+        cache.insert("a", "alice");
+        let removed = cache.remove(&"a");
+        assert_eq!(removed, Some("alice"));
+
+        let v = cache.get_or_insert_with("a", || "anna");
+        assert_eq!(v, &"anna");
+        assert_eq!(cache.entry_count(), 1);
     }
 }
