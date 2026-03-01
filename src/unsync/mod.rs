@@ -17,6 +17,7 @@ pub(crate) struct SlabEntry<K, V> {
     pub(crate) key: K,
     pub(crate) value: V,
     pub(crate) hash: u64,
+    pub(crate) visited: bool,
     prev: u32,
     next: u32,
 }
@@ -86,6 +87,7 @@ impl<K, V> Slab<K, V> {
 pub(crate) struct IndexDeque {
     head: u32,
     tail: u32,
+    hand: u32,
 }
 
 impl Default for IndexDeque {
@@ -93,6 +95,7 @@ impl Default for IndexDeque {
         Self {
             head: SENTINEL,
             tail: SENTINEL,
+            hand: SENTINEL,
         }
     }
 }
@@ -133,26 +136,50 @@ impl IndexDeque {
         entry.next = SENTINEL;
     }
 
-    #[inline]
-    fn move_to_back<K, V>(&mut self, slab: &mut Slab<K, V>, index: u32) {
-        if self.tail == index {
-            return;
+    fn advance_hand_past<K, V>(&mut self, slab: &Slab<K, V>, index: u32) {
+        if self.hand == index {
+            let prev = slab.get(index).prev;
+            self.hand = prev;
         }
-        self.unlink(slab, index);
-        self.push_back(slab, index);
     }
 
-    #[inline]
-    fn peek_front(&self) -> Option<u32> {
-        if self.head != SENTINEL {
-            Some(self.head)
+    fn sieve_evict<K, V>(&mut self, slab: &mut Slab<K, V>) -> Option<u32> {
+        if self.head == SENTINEL {
+            return None;
+        }
+
+        let mut current = if self.hand != SENTINEL {
+            self.hand
         } else {
-            None
+            self.tail
+        };
+
+        loop {
+            if current == SENTINEL {
+                current = self.tail;
+                if current == SENTINEL {
+                    return None;
+                }
+            }
+
+            let entry = slab.get_mut(current);
+            if entry.visited {
+                entry.visited = false;
+                let prev = entry.prev;
+                current = if prev != SENTINEL { prev } else { self.tail };
+            } else {
+                let prev = slab.get(current).prev;
+                self.hand = prev;
+                let victim = current;
+                self.unlink(slab, victim);
+                return Some(victim);
+            }
         }
     }
 
     fn clear(&mut self) {
         self.head = SENTINEL;
         self.tail = SENTINEL;
+        self.hand = SENTINEL;
     }
 }

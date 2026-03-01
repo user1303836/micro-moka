@@ -1,10 +1,10 @@
 [package]
 name = "micro-moka"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2018"
 rust-version = "1.76"
 
-description = "A lightweight, single-threaded cache library with W-TinyLFU eviction"
+description = "A lightweight, single-threaded cache library with SIEVE eviction"
 license = "MIT OR Apache-2.0"
 # homepage = "https://"
 documentation = "https://docs.rs/micro-moka/"
