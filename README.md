@@ -94,40 +94,6 @@ On every cache access, a probabilistic frequency counter (Count-Min Sketch) reco
 
 The frequency sketch uses 4-bit counters with periodic aging (halved when a sample threshold is reached), keeping memory usage bounded regardless of the key universe size. The sketch is only enabled once the cache reaches 50% capacity, avoiding overhead during warmup.
 
-## Benchmarks
-
-Measured with [criterion](https://crates.io/crates/criterion) 0.5 (LTO, 100 samples, fixed seed 42).
-Source: `benches/` directory. Reproduce with `RUSTFLAGS='--cfg bench_deps' cargo bench`.
-
-### Throughput (Mops/sec, higher is better)
-
-Zipf s=1.0, capacity=1,000, key space=10,000:
-
-| Operation | micro-moka | quick-cache | lru | hashlink | mini-moka | HashMap\* |
-|-----------|-----------|-------------|-----|----------|-----------|----------|
-| get | 52.2 | 685.2 | 429.8 | 357.7 | 33.8 | 242.2 |
-| insert | 51.5 | 167.4 | 156.2 | 158.2 | 21.2 | 215.8 |
-| mixed 95/5 | 56.9 | 534.2 | 377.9 | 389.6 | 32.4 | 210.2 |
-| mixed 50/50 | 63.1 | 289.9 | 244.9 | 251.6 | 26.0 | 216.6 |
-
-\*HashMap is unbounded (no eviction) -- shown as theoretical ceiling.
-
-**Hasher note:** These results compare default configurations. micro-moka and HashMap use SipHash (DoS-resistant, slower); quick-cache uses ahash; lru and hashlink use foldhash. Using a [faster hasher](#custom-hashers) with micro-moka will significantly improve throughput. micro-moka is 1.5-2.4x faster than mini-moka across all workloads.
-
-### Hit Ratio (%, higher is better)
-
-1M operations, capacity=1,000, key space=10,000:
-
-| Distribution | micro-moka | quick-cache | lru | hashlink | mini-moka |
-|---|---|---|---|---|---|
-| Zipf s=0.7 | 42.5 | 43.8 | 32.9 | 32.9 | 42.5 |
-| Zipf s=0.9 | 63.9 | 64.6 | 55.6 | 55.6 | 63.6 |
-| Zipf s=1.0 | 74.2 | 74.5 | 67.5 | 67.5 | 74.2 |
-| Zipf s=1.2 | 89.3 | 89.4 | 86.1 | 86.1 | 89.3 |
-| Uniform | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 |
-
-W-TinyLFU caches (micro-moka, quick-cache, mini-moka) achieve 7-10% higher hit ratios than LRU caches on skewed workloads. Under uniform access, all policies converge to the same hit ratio (capacity / key space).
-
 ## What Was Removed from Mini Moka
 
 | Feature | Rationale |
@@ -163,9 +129,6 @@ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' 
 
 # Miri
 cargo +nightly miri test
-
-# Benchmarks
-RUSTFLAGS='--cfg bench_deps' cargo bench
 ```
 
 ## Releases
