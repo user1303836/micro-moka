@@ -14,6 +14,10 @@
 /// A probabilistic multi-set for estimating the popularity of an element within
 /// a time window. The maximum frequency of an element is limited to 15 (4-bits)
 /// and an aging process periodically halves the popularity of all elements.
+///
+/// Uses a Count-Min Sketch with depth=2, providing ~75% confidence
+/// (1 - 1/e^depth approximated as 1 - (1/2)^2) that the estimated frequency
+/// does not exceed the true frequency by more than the error margin.
 #[derive(Default)]
 pub(crate) struct FrequencySketch {
     sample_size: u32,
@@ -178,7 +182,7 @@ impl FrequencySketch {
             count += (*entry & ONE_MASK).count_ones();
             *entry = (*entry >> 1) & RESET_MASK;
         }
-        self.size = (self.size >> 1) - (count >> 2);
+        self.size = (self.size >> 1) - (count >> 1);
     }
 
     /// Returns the table index for the counter at the specified depth.
@@ -318,6 +322,30 @@ mod tests {
                 _ => assert!(freq <= &popularity[2]),
             }
         }
+    }
+
+    #[test]
+    fn reset_size_correction() {
+        let mut sketch = FrequencySketch::default();
+        sketch.ensure_capacity(64);
+        let hasher = hasher();
+
+        // Fill to trigger reset.
+        let sample_size = sketch.sample_size;
+        for i in 0..sample_size {
+            sketch.increment(hasher(i));
+        }
+
+        // After reset, size must not exceed half of sample_size.
+        // With depth=2, the correction `count >> 1` properly accounts for
+        // 2 counters touched per increment. The old `count >> 2` (depth=4)
+        // would leave size inflated, potentially exceeding this bound.
+        assert!(
+            sketch.size <= sample_size / 2,
+            "size {} exceeded sample_size/2 {} after reset",
+            sketch.size,
+            sample_size / 2,
+        );
     }
 
     fn hasher<K: Hash>() -> impl Fn(K) -> u64 {
