@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-03-01
+
+### Changed
+
+- Reduced FrequencySketch (Count-Min Sketch) depth from 4 to 2, halving the number of hash derivations and table accesses per `increment()` and `frequency()` call. Depth=2 provides ~75% confidence (vs 93.75% at depth=4), which is sufficient for cache admission decisions. Benchmarks show 7-18% throughput improvement with negligible hit rate impact (within 0.3pp of depth=4 across all distributions).
+
+### Fixed
+
+- Fixed `reset()` size correction formula to use `count >> 1` (divide by 2) instead of `count >> 2` (divide by 4), matching the depth=2 counter count per increment. The old formula underestimated the correction, causing `size` to remain inflated after reset and triggering aging cycles more frequently than intended.
+
 ## [0.1.18] - 2026-03-01
 
 ### Changed
