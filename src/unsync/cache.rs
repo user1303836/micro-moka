@@ -96,6 +96,8 @@ pub struct Cache<K, V, S = RandomState> {
     deque: IndexDeque,
     frequency_sketch: FrequencySketch,
     frequency_sketch_enabled: bool,
+    read_buffer: [u64; 64],
+    read_buffer_len: u8,
 }
 
 impl<K, V, S> fmt::Debug for Cache<K, V, S>
@@ -207,6 +209,8 @@ where
             deque: IndexDeque::default(),
             frequency_sketch: FrequencySketch::default(),
             frequency_sketch_enabled: false,
+            read_buffer: [0; 64],
+            read_buffer_len: 0,
         }
     }
 
@@ -240,7 +244,6 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.hash(key);
-        self.frequency_sketch.increment(hash);
 
         let idx = match self
             .table
@@ -249,6 +252,12 @@ where
             Some(&idx) => idx,
             None => return None,
         };
+
+        if self.read_buffer_len == 64 {
+            self.drain_read_buffer();
+        }
+        self.read_buffer[self.read_buffer_len as usize] = hash;
+        self.read_buffer_len += 1;
 
         self.deque.move_to_back(&mut self.slab, idx);
         Some(&self.slab.get(idx).value)
@@ -390,6 +399,7 @@ where
         let old_slab = std::mem::replace(&mut self.slab, Slab::new());
         self.deque.clear();
         self.entry_count = 0;
+        self.read_buffer_len = 0;
 
         drop(old_table);
         drop(old_slab);
@@ -526,7 +536,16 @@ where
     }
 
     #[inline]
+    fn drain_read_buffer(&mut self) {
+        for i in 0..self.read_buffer_len as usize {
+            self.frequency_sketch.increment(self.read_buffer[i]);
+        }
+        self.read_buffer_len = 0;
+    }
+
+    #[inline]
     fn handle_insert(&mut self, idx: u32, hash: u64) {
+        self.drain_read_buffer();
         let has_free_space = self.has_enough_capacity(1, self.entry_count);
 
         if has_free_space {
@@ -631,6 +650,9 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
+    fn read_buffer_len(&self) -> u8 {
+        self.read_buffer_len
+    }
 }
 
 enum AdmissionResult {
@@ -653,27 +675,34 @@ mod tests {
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
-        // counts: a -> 1, b -> 1
+        // buffered: [hash_a, hash_b] (not yet flushed)
 
         cache.insert("c", "cindy");
+        // drain flushes buffer -> counts: a -> 1, b -> 1
         assert_eq!(cache.get(&"c"), Some(&"cindy"));
         assert!(cache.contains_key(&"c"));
-        // counts: a -> 1, b -> 1, c -> 1
+        // buffered: [hash_c]
 
         assert!(cache.contains_key(&"a"));
         assert_eq!(cache.get(&"a"), Some(&"alice"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
         assert!(cache.contains_key(&"b"));
-        // counts: a -> 2, b -> 2, c -> 1
+        // buffered: [hash_c, hash_a, hash_b]
 
         // "d" should not be admitted because its frequency is too low.
-        cache.insert("d", "david"); //   count: d -> 0
-        assert_eq!(cache.get(&"d"), None); //   d -> 1
+        // insert drains buffer -> counts: a -> 2, b -> 2, c -> 1
+        cache.insert("d", "david");
+        assert_eq!(cache.get(&"d"), None);
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", "david");
         assert!(!cache.contains_key(&"d"));
-        assert_eq!(cache.get(&"d"), None); //   d -> 2
+        assert_eq!(cache.get(&"d"), None);
+
+        // Build up d's frequency directly (misses do not buffer).
+        let hash_d = cache.hash(&"d");
+        cache.frequency_sketch.increment(hash_d);
+        cache.frequency_sketch.increment(hash_d);
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher than c's.
@@ -1098,5 +1127,91 @@ mod tests {
         assert!(cache_ref.contains_key(&"b"));
         assert!(cache_ref.contains_key(&"c"));
         assert!(!cache_ref.contains_key(&"d"));
+    }
+
+    #[test]
+    fn read_buffer_accumulates_on_hits() {
+        let mut cache = Cache::new(10);
+        cache.enable_frequency_sketch_for_testing();
+
+        cache.insert("a", 1);
+        cache.insert("b", 2);
+        assert_eq!(cache.read_buffer_len(), 0);
+
+        cache.get(&"a");
+        assert_eq!(cache.read_buffer_len(), 1);
+
+        cache.get(&"b");
+        assert_eq!(cache.read_buffer_len(), 2);
+    }
+
+    #[test]
+    fn read_buffer_skips_misses() {
+        let mut cache = Cache::new(10);
+        cache.enable_frequency_sketch_for_testing();
+
+        cache.insert("a", 1);
+        assert_eq!(cache.read_buffer_len(), 0);
+
+        assert_eq!(cache.get(&"missing"), None);
+        assert_eq!(cache.read_buffer_len(), 0);
+
+        cache.get(&"a");
+        assert_eq!(cache.read_buffer_len(), 1);
+
+        assert_eq!(cache.get(&"also_missing"), None);
+        assert_eq!(cache.read_buffer_len(), 1);
+    }
+
+    #[test]
+    fn read_buffer_drains_on_insert() {
+        let mut cache = Cache::new(10);
+        cache.enable_frequency_sketch_for_testing();
+
+        cache.insert("a", 1);
+        cache.get(&"a");
+        cache.get(&"a");
+        cache.get(&"a");
+        assert_eq!(cache.read_buffer_len(), 3);
+
+        cache.insert("b", 2);
+        assert_eq!(cache.read_buffer_len(), 0);
+
+        let hash_a = cache.hash(&"a");
+        assert!(cache.frequency_sketch.frequency(hash_a) >= 3);
+    }
+
+    #[test]
+    fn read_buffer_drains_at_capacity() {
+        let mut cache = Cache::new(100);
+        cache.enable_frequency_sketch_for_testing();
+
+        for i in 0u32..65 {
+            cache.insert(i, i);
+        }
+
+        for i in 0u32..64 {
+            cache.get(&i);
+        }
+        assert_eq!(cache.read_buffer_len(), 64);
+
+        // The 65th hit should trigger a drain before buffering.
+        cache.get(&64);
+        assert_eq!(cache.read_buffer_len(), 1);
+    }
+
+    #[test]
+    fn invalidate_all_resets_read_buffer() {
+        let mut cache = Cache::new(10);
+        cache.enable_frequency_sketch_for_testing();
+
+        cache.insert("a", 1);
+        cache.insert("b", 2);
+        cache.get(&"a");
+        cache.get(&"b");
+        assert_eq!(cache.read_buffer_len(), 2);
+
+        cache.invalidate_all();
+        assert_eq!(cache.read_buffer_len(), 0);
     }
 }
