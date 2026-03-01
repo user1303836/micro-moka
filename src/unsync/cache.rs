@@ -240,7 +240,6 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.hash(key);
-        self.frequency_sketch.increment(hash);
 
         let idx = match self
             .table
@@ -250,6 +249,7 @@ where
             None => return None,
         };
 
+        self.frequency_sketch.increment(hash);
         self.deque.move_to_back(&mut self.slab, idx);
         Some(&self.slab.get(idx).value)
     }
@@ -302,6 +302,7 @@ where
         }
 
         let hash = self.hash(&key);
+        self.frequency_sketch.increment(hash);
 
         if let Some(&idx) = self
             .table
@@ -635,31 +636,32 @@ mod tests {
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
-        // counts: a -> 1, b -> 1
+        // counts: a -> 2, b -> 2
 
         cache.insert("c", "cindy");
         assert_eq!(cache.get(&"c"), Some(&"cindy"));
         assert!(cache.contains_key(&"c"));
-        // counts: a -> 1, b -> 1, c -> 1
+        // counts: a -> 2, b -> 2, c -> 2
 
         assert!(cache.contains_key(&"a"));
         assert_eq!(cache.get(&"a"), Some(&"alice"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
         assert!(cache.contains_key(&"b"));
-        // counts: a -> 2, b -> 2, c -> 1
+        // counts: a -> 3, b -> 3, c -> 2
 
         // "d" should not be admitted because its frequency is too low.
-        cache.insert("d", "david"); //   count: d -> 0
-        assert_eq!(cache.get(&"d"), None); //   d -> 1
+        // Each insert attempt increments d's frequency in the sketch.
+        cache.insert("d", "david"); //   count: d -> 1 (rejected)
         assert!(!cache.contains_key(&"d"));
+        assert_eq!(cache.get(&"d"), None); // miss: no increment
 
-        cache.insert("d", "david");
+        cache.insert("d", "david"); //   count: d -> 2 (rejected)
         assert!(!cache.contains_key(&"d"));
-        assert_eq!(cache.get(&"d"), None); //   d -> 2
+        assert_eq!(cache.get(&"d"), None); // miss: no increment
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher than c's.
-        cache.insert("d", "dennis");
+        cache.insert("d", "dennis"); //   count: d -> 3
         assert_eq!(cache.get(&"a"), Some(&"alice"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
         assert_eq!(cache.get(&"c"), None);
