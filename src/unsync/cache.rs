@@ -312,6 +312,23 @@ where
             return;
         }
 
+        if !self.has_enough_capacity(1, self.entry_count) {
+            if self.max_capacity == Some(0) {
+                return;
+            }
+
+            let candidate_freq = self.frequency_sketch.frequency(hash);
+
+            match self.admit(candidate_freq) {
+                AdmissionResult::Admitted { victim_index } => {
+                    self.remove_by_index(victim_index);
+                }
+                AdmissionResult::Rejected => {
+                    return;
+                }
+            }
+        }
+
         let slab_entry = SlabEntry {
             key,
             value,
@@ -325,7 +342,12 @@ where
         self.table
             .insert_unique(hash, idx, |&existing_idx| slab.get(existing_idx).hash);
 
-        self.handle_insert(idx, hash);
+        self.deque.push_back(&mut self.slab, idx);
+        self.entry_count += 1;
+
+        if self.should_enable_frequency_sketch() {
+            self.enable_frequency_sketch();
+        }
     }
 
     /// Discards any cached value for the key.
@@ -523,46 +545,6 @@ where
         let skt_capacity = common::sketch_capacity(cache_capacity);
         self.frequency_sketch.ensure_capacity(skt_capacity);
         self.frequency_sketch_enabled = true;
-    }
-
-    #[inline]
-    fn handle_insert(&mut self, idx: u32, hash: u64) {
-        let has_free_space = self.has_enough_capacity(1, self.entry_count);
-
-        if has_free_space {
-            self.deque.push_back(&mut self.slab, idx);
-            self.entry_count += 1;
-
-            if self.should_enable_frequency_sketch() {
-                self.enable_frequency_sketch();
-            }
-            return;
-        }
-
-        if let Some(max) = self.max_capacity {
-            if max == 0 {
-                self.remove_by_index(idx);
-                return;
-            }
-        }
-
-        let candidate_freq = self.frequency_sketch.frequency(hash);
-
-        match self.admit(candidate_freq) {
-            AdmissionResult::Admitted { victim_index } => {
-                self.remove_by_index(victim_index);
-
-                self.deque.push_back(&mut self.slab, idx);
-                self.entry_count += 1;
-
-                if self.should_enable_frequency_sketch() {
-                    self.enable_frequency_sketch();
-                }
-            }
-            AdmissionResult::Rejected => {
-                self.remove_by_index(idx);
-            }
-        }
     }
 
     #[inline]
@@ -1098,5 +1080,38 @@ mod tests {
         assert!(cache_ref.contains_key(&"b"));
         assert!(cache_ref.contains_key(&"c"));
         assert!(!cache_ref.contains_key(&"d"));
+    }
+
+    #[test]
+    fn rejected_candidate_never_visible() {
+        let mut cache = Cache::new(3);
+        cache.enable_frequency_sketch_for_testing();
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+
+        for _ in 0..10 {
+            cache.get(&"a");
+            cache.get(&"b");
+            cache.get(&"c");
+        }
+
+        // "d" has never been accessed so its frequency is 0.
+        // It should be rejected without ever appearing in the cache.
+        cache.insert("d", "david");
+        assert_eq!(cache.get(&"d"), None);
+        assert!(!cache.contains_key(&"d"));
+        assert_eq!(cache.entry_count(), 3);
+        assert_eq!(cache.table.len(), 3);
+    }
+
+    #[test]
+    fn zero_capacity_insert_returns_immediately() {
+        let mut cache = Cache::new(0);
+        cache.insert("a", "alice");
+        assert_eq!(cache.entry_count(), 0);
+        assert!(!cache.contains_key(&"a"));
+        assert_eq!(cache.get(&"a"), None);
     }
 }

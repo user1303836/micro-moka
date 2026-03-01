@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-03-01
+
+### Changed
+
+- Moved W-TinyLFU admission check before slab allocation and hash table insertion so that rejected candidates return immediately with zero wasted work, eliminating a slab allocation, hash table insert, hash table remove, and slab deallocation per rejection.
+
 ## [0.1.16] - 2026-03-01
 
 ### Added
