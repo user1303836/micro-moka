@@ -23,6 +23,8 @@ pub(crate) struct FrequencySketch {
 }
 
 // A mixture of seeds from FNV-1a, CityHash, and Murmur3. (Taken from Caffeine)
+// Only the first 2 seeds are actively used (depth=2); the remaining are retained
+// from the original Caffeine implementation.
 static SEED: [u64; 4] = [
     0xc3a5_c85c_97cb_3127,
     0xb492_b66f_be98_f273,
@@ -46,12 +48,11 @@ static ONE_MASK: u64 = 0x1111_1111_1111_1111;
 // frequency of an entry in a stream of cache access events.
 //
 // The counter matrix is represented as a single dimensional array holding 16
-// counters per slot. A fixed depth of four balances the accuracy and cost,
+// counters per slot. A fixed depth of two balances the accuracy and cost,
 // resulting in a width of four times the length of the array. To retain an
 // accurate estimation the array's length equals the maximum number of entries
 // in the cache, increased to the closest power-of-two to exploit more efficient
-// bit masking. This configuration results in a confidence of 93.75% and error
-// bound of e / width.
+// bit masking.
 //
 // The frequency of all entries is aged periodically using a sampling window
 // based on the maximum number of entries in the cache. This is referred to as
@@ -119,7 +120,7 @@ impl FrequencySketch {
 
         let start = ((hash & 3) << 2) as u8;
         let mut frequency = u8::MAX;
-        for i in 0..4 {
+        for i in 0..2 {
             let index = self.index_of(hash, i);
             let shift = (start + i) << 2;
             let count = ((self.table[index] >> shift) & 0xF) as u8;
@@ -141,7 +142,7 @@ impl FrequencySketch {
 
         let start = ((hash & 3) << 2) as u8;
         let mut added = false;
-        for i in 0..4 {
+        for i in 0..2 {
             let index = self.index_of(hash, i);
             added |= self.increment_at(index, start + i);
         }
@@ -259,11 +260,11 @@ mod tests {
         let mut indexes = std::collections::HashSet::new();
         let hashes = [u64::MAX, 0, 1];
         for hash in hashes.iter() {
-            for depth in 0..4 {
+            for depth in 0..2 {
                 indexes.insert(sketch.index_of(*hash, depth));
             }
         }
-        assert_eq!(indexes.len(), 4 * hashes.len())
+        assert_eq!(indexes.len(), 2 * hashes.len())
     }
 
     // This test was ported from Caffeine.
@@ -388,7 +389,7 @@ mod kani {
 
         // Check for arbitrary hashes.
         let hash = kani::any();
-        for i in 0..4 {
+        for i in 0..2 {
             let index = sketch.index_of(hash, i);
             assert!(index < sketch.table.len());
         }
