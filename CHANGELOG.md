@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-03-01
+
+### Added
+
+- Added benchmark suite comparing micro-moka against quick-cache, lru, hashlink, mini-moka, and std HashMap.
+- Criterion throughput benchmarks across Zipf (s=1.0, s=0.7), uniform, and mixed (95/5, 50/50) workloads at cache sizes 100, 1,000, and 10,000.
+- Standalone hit-ratio benchmark (1M ops, Zipf s=0.7/0.9/1.0/1.2, uniform).
+- README updated with benchmark results tables.
+
 ## [0.1.15] - 2026-02-28
 
 - Added test verifying `contains_key()` works with shared (`&self`) references, confirming the read-only signature enables callers to hold shared borrows while checking key existence.

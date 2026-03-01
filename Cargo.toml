@@ -1,6 +1,6 @@
 [package]
 name = "micro-moka"
-version = "0.1.15"
+version = "0.1.16"
 edition = "2018"
 rust-version = "1.76"
 
@@ -21,6 +21,19 @@ hashbrown = { version = "0.16", default-features = false, features = ["inline-mo
 anyhow = "1.0.19"
 getrandom = "0.2"
 once_cell = "1.7"
+
+[target.'cfg(bench_deps)'.dev-dependencies]
+quick_cache = "0.6"
+lru = "0.12"
+hashlink = "0.11"
+mini-moka = "0.10"
+rand = "0.8"
+rand_distr = "0.4"
+ahash = "0.8.11"  # floor pin: 0.8.4 fails on nightly (removed stdsimd feature)
+
+[[bench]]
+name = "benchmark"
+harness = false
 
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0.103"
@@ -46,4 +59,5 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(circleci)",
     "cfg(trybuild)",
     "cfg(beta_clippy)",
+    "cfg(bench_deps)",
 ] }
