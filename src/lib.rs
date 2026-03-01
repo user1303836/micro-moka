@@ -20,10 +20,8 @@
 //! # Features
 //!
 //! - A cache can be bounded by the maximum number of entries.
-//! - Maintains good hit rate by using entry replacement algorithms inspired by
-//!   [Caffeine][caffeine-git]:
-//!     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
-//!     - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
+//! - Maintains good hit rate by using the SIEVE eviction algorithm (NSDI 2024),
+//!   a lazy promotion, quick demotion algorithm with O(1) eviction.
 //!
 //! # Examples
 //!

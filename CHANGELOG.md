@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.20] - 2026-03-01
+
+### Changed
+
+- Replaced W-TinyLFU eviction policy with SIEVE (NSDI 2024). The `get()` hot path now sets a single `visited = true` bit instead of performing a frequency sketch increment (~20-40 cycles for hash derivations, table lookups, conditional counter increments, and reset checks) and a deque move_to_back (~15-20 cycles for pointer reads/writes). On eviction, a hand pointer sweeps backward through the deque clearing visited bits until it finds an unvisited entry to evict. This eliminates the `FrequencySketch` from the get/insert paths entirely, removes all deque reordering on cache hits, and removes frequency-based admission decisions. New entries are always admitted.
+
+### Removed
+
+- Removed `FrequencySketch` (Count-Min Sketch) from the cache hot path. The module is retained for its own unit tests but is no longer used by the cache.
+- Removed `sketch_capacity()` helper, `frequency_sketch_enabled` field, `should_enable_frequency_sketch()`, `enable_frequency_sketch()`, `do_enable_frequency_sketch()`, `admit()`, `AdmissionResult`, `remove_by_index()`, `evict_lru_entries()`, and `EVICTION_BATCH_SIZE`.
+
 ## [0.1.19] - 2026-03-01
 
 ### Changed
