@@ -43,6 +43,17 @@ jobs:
         if: ${{ matrix.rust == 'nightly' }}
         run: cargo update -Z minimal-versions
 
+      - name: Pin transitive deps incompatible with MSRV (MSRV only)
+        if: ${{ matrix.rust == '1.76.0' }}
+        run: |
+          rustup toolchain install stable --no-self-update --profile minimal
+          cargo +stable generate-lockfile
+          cargo +stable update toml --precise 1.0.4
+          cargo +stable update toml_datetime --precise 1.0.0
+          cargo +stable update toml_parser --precise 1.0.9
+          cargo +stable update toml_writer --precise 1.0.7
+          cargo +stable update serde_spanned --precise 1.0.4
+
       - name: Show cargo tree
         run: cargo tree
 
