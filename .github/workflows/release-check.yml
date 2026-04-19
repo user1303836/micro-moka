@@ -4,6 +4,14 @@ on:
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '.github/**'
+      - '.devcontainer/**'
+      - '.gitpod.yml'
+      - '.vscode/**'
+      - 'CHANGELOG.md'
+      - 'README.md'
+      - 'LICENSE-*'
   workflow_dispatch:
 
 permissions:

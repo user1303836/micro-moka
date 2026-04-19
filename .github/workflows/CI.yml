@@ -53,6 +53,7 @@ jobs:
           cargo +stable update toml_parser --precise 1.0.9
           cargo +stable update toml_writer --precise 1.0.7
           cargo +stable update serde_spanned --precise 1.0.4
+          cargo +stable update indexmap --precise 2.12.1
 
       - name: Show cargo tree
         run: cargo tree
