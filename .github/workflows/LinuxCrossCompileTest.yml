@@ -2,20 +2,25 @@ name: Linux cross compile tests
 
 on:
   push:
+    branches:
+      - main
     paths-ignore:
-      - ".devcontainer/**"
-      - ".gitpod.yml"
-      - ".vscode/**"
-      - "tests/**"
+      - '.devcontainer/**'
+      - '.gitpod.yml'
+      - '.vscode/**'
+      - 'tests/**'
   pull_request:
     paths-ignore:
-      - ".devcontainer/**"
-      - ".gitpod.yml"
-      - ".vscode/**"
-      - "tests/**"
+      - '.devcontainer/**'
+      - '.gitpod.yml'
+      - '.vscode/**'
+      - 'tests/**'
   schedule:
-    # Run against the last commit on the default branch on Friday at 9pm (UTC?)
-    - cron: "0 21 * * 5"
+    - cron: '0 21 * * 5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   linux-cross:
@@ -23,38 +28,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - target: aarch64-unknown-linux-musl
-            rust-version: stable
-          - target: i686-unknown-linux-musl
-            rust-version: stable
-          - target: armv7-unknown-linux-musleabihf
-            rust-version: stable
-          - target: armv5te-unknown-linux-musleabi
-            rust-version: stable
+        target:
+          - aarch64-unknown-linux-musl
+          - i686-unknown-linux-musl
+          - armv7-unknown-linux-musleabihf
+          - armv5te-unknown-linux-musleabi
 
     steps:
-      - name: Checkout Micro Moka
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.platform.rust-version }}
-          targets: ${{ matrix.platform.target }}
+          toolchain: stable
+          targets: ${{ matrix.target }}
 
       - name: Install cross
         uses: taiki-e/install-action@v2
         with:
           tool: cross
 
-      - name: Remove integration tests
-        run: |
-          rm -rf tests
-
-      - run: cargo clean
-
       - name: Run tests
-        run: |
-          cross ${{ matrix.platform.carge-version }} test --release \
-            --target ${{ matrix.platform.target }}
+        run: cross test --release --target ${{ matrix.target }}

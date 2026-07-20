@@ -2,36 +2,38 @@ name: Miri tests
 
 on:
   push:
+    branches:
+      - main
     paths-ignore:
-    - '.devcontainer/**'
-    - '.gitpod.yml'
-    - '.vscode/**'
-    - 'tests/**'
+      - '.devcontainer/**'
+      - '.gitpod.yml'
+      - '.vscode/**'
+      - 'tests/**'
   pull_request:
     paths-ignore:
-    - '.devcontainer/**'
-    - '.gitpod.yml'
-    - '.vscode/**'
-    - 'tests/**'
+      - '.devcontainer/**'
+      - '.gitpod.yml'
+      - '.vscode/**'
+      - 'tests/**'
   schedule:
-    # Run against the last commit on the default branch on Friday at 9pm (UTC?)
-    - cron:  '0 21 * * 5'
+    - cron: '0 21 * * 5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Micro Moka
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-      - name: Install Rust nightly toolchain with Miri
+      - name: Install Rust nightly with Miri
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
           components: miri
 
-      - run: cargo clean
-
-      - name: Run Miri test (deque)
-        run: cargo miri test deque
+      - name: Run Miri tests
+        run: cargo miri test --lib --all-features

@@ -34,18 +34,10 @@
 //!
 //! # Minimum Supported Rust Versions
 //!
-//! This crate's minimum supported Rust versions (MSRV) are the followings:
-//!
-//! | Feature          | MSRV                       |
-//! |:-----------------|:--------------------------:|
-//! | default features | Rust 1.76.0 (Feb 8, 2024) |
-//!
-//! If only the default features are enabled, MSRV will be updated conservatively.
-//! When using other features, MSRV might be updated more frequently, up to the
-//! latest stable. In both cases, increasing MSRV is _not_ considered a
+//! This crate's minimum supported Rust version (MSRV) is Rust 1.76.0.
+//! MSRV will be updated conservatively, and increasing it is not considered a
 //! semver-breaking change.
 
-pub(crate) mod common;
 pub(crate) mod policy;
 pub mod unsync;
 

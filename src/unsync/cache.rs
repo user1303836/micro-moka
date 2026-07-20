@@ -65,14 +65,14 @@ use std::{
 ///
 /// # Hashing Algorithm
 ///
-/// By default, `Cache` uses a hashing algorithm selected to provide resistance
-/// against HashDoS attacks. It will the same one used by
-/// `std::collections::HashMap`, which is currently SipHash 1-3.
+/// By default, `Cache` uses the same hashing algorithm as
+/// `std::collections::HashMap`, selected to provide resistance against HashDoS
+/// attacks. The exact algorithm is intentionally unspecified by the standard
+/// library.
 ///
-/// While SipHash's performance is very competitive for medium sized keys, other
-/// hashing algorithms will outperform it for small keys such as integers as well as
-/// large keys such as long strings. However those algorithms will typically not
-/// protect against attacks such as HashDoS.
+/// Alternative hashing algorithms may outperform the default for small keys such
+/// as integers and large keys such as long strings. However, those algorithms do
+/// not always protect against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
 /// [`build_with_hasher`][build-with-hasher-method] method of the
@@ -93,9 +93,8 @@ pub struct Cache<K, V, S = RandomState> {
 
 impl<K, V, S> fmt::Debug for Cache<K, V, S>
 where
-    K: fmt::Debug + Eq + Hash,
+    K: fmt::Debug,
     V: fmt::Debug,
-    S: BuildHasher + Clone,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d_map = f.debug_map();
@@ -123,7 +122,7 @@ where
         Self::with_everything(Some(max_capacity), None, build_hasher)
     }
 
-    /// Returns a [`CacheBuilder`][builder-struct], which can builds a `Cache` with
+    /// Returns a [`CacheBuilder`][builder-struct], which can build a `Cache` with
     /// various configuration knobs.
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
@@ -173,12 +172,37 @@ impl<K, V, S> Cache<K, V, S> {
     pub fn weighted_size(&self) -> u64 {
         self.entry_count
     }
+
+    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
+    /// iterator element type is `(&K, &V)`.
+    ///
+    /// Unlike the `get` method, visiting entries via an iterator does not mark
+    /// entries as visited for eviction purposes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use micro_moka::unsync::Cache;
+    ///
+    /// let mut cache = Cache::new(100);
+    /// cache.insert("Julia", 14);
+    ///
+    /// let mut iter = cache.iter();
+    /// let (k, v) = iter.next().unwrap(); // (&K, &V)
+    /// assert_eq!(k, &"Julia");
+    /// assert_eq!(v, &14);
+    ///
+    /// assert!(iter.next().is_none());
+    /// ```
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        Iter::new(&self.slab.entries, self.entry_count as usize)
+    }
 }
 
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
-    S: BuildHasher + Clone,
+    S: BuildHasher,
 {
     pub(crate) fn with_everything(
         max_capacity: Option<u64>,
@@ -240,8 +264,9 @@ where
             None => return None,
         };
 
-        self.slab.get_mut(idx).visited = true;
-        Some(&self.slab.get(idx).value)
+        let entry = self.slab.get_mut(idx);
+        entry.visited = true;
+        Some(&entry.value)
     }
 
     /// Returns an immutable reference of the value corresponding to the key,
@@ -287,8 +312,11 @@ where
     /// entry is marked as visited. If the key is absent, `f` is called to
     /// compute the value, which is then inserted and returned.
     ///
-    /// This performs a single hash computation and a single probe sequence,
-    /// making it more efficient than a `get()` followed by `insert()`.
+    /// This performs a single hash computation and avoids the extra lookup
+    /// required by a separate `get()` followed by `insert()`.
+    ///
+    /// A zero-capacity cache retains the value produced by this method because
+    /// the returned reference must remain valid. A later miss replaces that value.
     ///
     /// # Example
     ///
@@ -315,8 +343,9 @@ where
             .table
             .find(hash, |&idx| self.slab.get(idx).key.borrow() == &key)
         {
-            self.slab.get_mut(idx).visited = true;
-            return &self.slab.get(idx).value;
+            let entry = self.slab.get_mut(idx);
+            entry.visited = true;
+            return &entry.value;
         }
 
         let value = f();
@@ -407,8 +436,9 @@ where
             let (idx, _) = entry.remove();
             self.deque.advance_hand_past(&self.slab, idx);
             self.deque.unlink(&mut self.slab, idx);
-            self.slab.deallocate(idx);
+            let removed = self.slab.deallocate(idx);
             self.entry_count -= 1;
+            drop(removed);
         }
     }
 
@@ -444,6 +474,7 @@ where
     #[inline(never)]
     pub fn invalidate_all(&mut self) {
         let old_capacity = self.table.capacity();
+        let old_slab_capacity = self.slab.entries.capacity();
         let old_table = std::mem::replace(&mut self.table, HashTable::new());
         let old_slab = std::mem::replace(&mut self.slab, Slab::new());
         self.deque.clear();
@@ -459,6 +490,7 @@ where
             let _ = idx;
             0
         });
+        self.slab.entries.reserve(old_slab_capacity);
     }
 
     /// Discards cached values that satisfy a predicate.
@@ -476,44 +508,17 @@ where
             .map(|(idx, _)| idx)
             .collect();
 
-        let mut invalidated = 0u64;
         for idx in indices_to_invalidate {
             let hash = self.slab.get(idx).hash;
             if let Ok(entry) = self.table.find_entry(hash, |&table_idx| table_idx == idx) {
                 entry.remove();
                 self.deque.advance_hand_past(&self.slab, idx);
                 self.deque.unlink(&mut self.slab, idx);
-                self.slab.deallocate(idx);
-                invalidated += 1;
+                let removed = self.slab.deallocate(idx);
+                self.entry_count -= 1;
+                drop(removed);
             }
         }
-        self.entry_count -= invalidated;
-    }
-
-    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
-    /// iterator element type is `(&K, &V)`.
-    ///
-    /// Unlike the `get` method, visiting entries via an iterator do not mark
-    /// entries as visited for eviction purposes.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use micro_moka::unsync::Cache;
-    ///
-    /// let mut cache = Cache::new(100);
-    /// cache.insert("Julia", 14);
-    ///
-    /// let mut iter = cache.iter();
-    /// let (k, v) = iter.next().unwrap(); // (&K, &V)
-    /// assert_eq!(k, &"Julia");
-    /// assert_eq!(v, &14);
-    ///
-    /// assert!(iter.next().is_none());
-    /// ```
-    ///
-    pub fn iter(&self) -> Iter<'_, K, V> {
-        Iter::new(&self.slab.entries)
     }
 }
 
@@ -523,7 +528,7 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
-    S: BuildHasher + Clone,
+    S: BuildHasher,
 {
     #[inline]
     fn hash<Q>(&self, key: &Q) -> u64
@@ -552,8 +557,9 @@ where
             {
                 entry.remove();
             }
-            self.slab.deallocate(victim_idx);
+            let removed = self.slab.deallocate(victim_idx);
             self.entry_count -= 1;
+            drop(removed);
         }
     }
 }
@@ -561,6 +567,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::Cache;
+
+    struct DropBomb(bool);
+
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            if self.0 {
+                panic!("intentional drop panic");
+            }
+        }
+    }
 
     #[test]
     fn basic_single_thread() {
@@ -797,6 +813,76 @@ mod tests {
         assert_eq!(cache.get(&"c"), Some(&"cindy"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
         assert_eq!(cache.get(&"a"), None);
+    }
+
+    #[test]
+    fn invalidate_is_consistent_when_value_drop_panics() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let mut cache = Cache::new(2);
+        cache.insert("bomb", DropBomb(true));
+
+        let result = catch_unwind(AssertUnwindSafe(|| cache.invalidate(&"bomb")));
+        assert!(result.is_err());
+        assert_eq!(cache.entry_count(), 0);
+        assert_eq!(cache.table.len(), 0);
+        assert_eq!(cache.slab.iter().count(), 0);
+
+        cache.insert("safe", DropBomb(false));
+        assert_eq!(cache.entry_count(), 1);
+        assert!(cache.contains_key(&"safe"));
+    }
+
+    #[test]
+    fn eviction_is_consistent_when_value_drop_panics() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let mut cache = Cache::new(1);
+        cache.insert("bomb", DropBomb(true));
+
+        let result = catch_unwind(AssertUnwindSafe(|| cache.insert("new", DropBomb(false))));
+        assert!(result.is_err());
+        assert_eq!(cache.entry_count(), 0);
+        assert_eq!(cache.table.len(), 0);
+        assert_eq!(cache.slab.iter().count(), 0);
+
+        cache.insert("safe", DropBomb(false));
+        assert_eq!(cache.entry_count(), 1);
+        assert!(cache.contains_key(&"safe"));
+    }
+
+    #[test]
+    fn predicate_invalidation_is_consistent_when_value_drop_panics() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let mut cache = Cache::new(2);
+        cache.insert("bomb", DropBomb(true));
+        cache.insert("safe", DropBomb(false));
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            cache.invalidate_entries_if(|_, value| value.0);
+        }));
+        assert!(result.is_err());
+        assert_eq!(cache.entry_count(), 1);
+        assert_eq!(cache.table.len(), 1);
+        assert_eq!(cache.slab.iter().count(), 1);
+        assert!(cache.contains_key(&"safe"));
+    }
+
+    #[test]
+    fn invalidate_all_preserves_allocated_capacity() {
+        let mut cache = Cache::<u32, u32>::builder()
+            .max_capacity(128)
+            .initial_capacity(128)
+            .build();
+        let table_capacity = cache.table.capacity();
+        let slab_capacity = cache.slab.entries.capacity();
+        cache.insert(1, 1);
+
+        cache.invalidate_all();
+
+        assert!(cache.table.capacity() >= table_capacity);
+        assert!(cache.slab.entries.capacity() >= slab_capacity);
     }
 
     #[test]
@@ -1204,5 +1290,46 @@ mod tests {
         let v = cache.get_or_insert_with("a", || "anna");
         assert_eq!(v, &"anna");
         assert_eq!(cache.entry_count(), 1);
+    }
+
+    #[test]
+    fn iterator_reports_exact_remaining_length() {
+        let mut cache = Cache::new(3);
+        cache.insert("a", 1);
+        cache.insert("b", 2);
+        cache.insert("c", 3);
+        cache.invalidate(&"b");
+
+        let mut iter = cache.iter();
+        assert_eq!(iter.len(), 2);
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+        iter.next();
+        assert_eq!(iter.len(), 1);
+        iter.next();
+        assert_eq!(iter.len(), 0);
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn custom_hasher_does_not_need_clone() {
+        use crate::unsync::CacheBuilder;
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::BuildHasher;
+
+        struct NonCloneBuildHasher;
+
+        impl BuildHasher for NonCloneBuildHasher {
+            type Hasher = DefaultHasher;
+
+            fn build_hasher(&self) -> Self::Hasher {
+                DefaultHasher::new()
+            }
+        }
+
+        let mut cache = CacheBuilder::<u32, u32, _>::new(2).build_with_hasher(NonCloneBuildHasher);
+        cache.insert(1, 10);
+        assert_eq!(cache.get(&1), Some(&10));
+        assert_eq!(format!("{cache:?}"), "{1: 10}");
     }
 }

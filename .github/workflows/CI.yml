@@ -2,19 +2,23 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
     paths-ignore:
-    - '.devcontainer/**'
-    - '.gitpod.yml'
-    - '.vscode/**'
+      - '.devcontainer/**'
+      - '.gitpod.yml'
+      - '.vscode/**'
   pull_request:
     paths-ignore:
-    - '.devcontainer/**'
-    - '.gitpod.yml'
-    - '.vscode/**'
+      - '.devcontainer/**'
+      - '.gitpod.yml'
+      - '.vscode/**'
   schedule:
-    # Run against the last commit on the default branch on Friday at 8pm (UTC?)
     - cron: '0 20 * * 5'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -25,45 +29,27 @@ jobs:
         rust:
           - stable
           - beta
-          - 1.76.0  # MSRV
-          - nightly # For checking minimum version dependencies.
+          - 1.76.0
+          - nightly
 
     steps:
-      - name: Checkout Micro Moka
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
 
-      - run: cargo clean
-
-      - name: Downgrade dependencies to minimal versions (Nightly only)
+      - name: Downgrade dependencies to minimal versions
         if: ${{ matrix.rust == 'nightly' }}
         run: cargo update -Z minimal-versions
 
-      - name: Pin transitive deps incompatible with MSRV (MSRV only)
-        if: ${{ matrix.rust == '1.76.0' }}
-        run: |
-          rustup toolchain install stable --no-self-update --profile minimal
-          cargo +stable generate-lockfile
-          cargo +stable update toml --precise 1.0.4
-          cargo +stable update toml_datetime --precise 1.0.0
-          cargo +stable update toml_parser --precise 1.0.9
-          cargo +stable update toml_writer --precise 1.0.7
-          cargo +stable update serde_spanned --precise 1.0.4
-          cargo +stable update indexmap --precise 2.12.1
-
-      - name: Show cargo tree
+      - name: Show dependency tree
         run: cargo tree
 
       - name: Run tests (debug)
         run: cargo test --all-features
-        env:
-          RUSTFLAGS: '--cfg trybuild'
 
       - name: Run tests (release)
         run: cargo test --release --all-features
-        env:
-          RUSTFLAGS: '--cfg trybuild'

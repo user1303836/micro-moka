@@ -19,9 +19,7 @@ fn main() {
 
     println!("=== Throughput (Mops/sec) | cap={CAP} | Zipf s=1.0 ===");
     println!();
-    println!(
-        "| Operation | micro-moka | quick-cache | lru | hashlink | mini-moka | hashmap |"
-    );
+    println!("| Operation | micro-moka | quick-cache | lru | hashlink | mini-moka | hashmap |");
     println!("|-----------|-----------|-------------|-----|----------|-----------|---------|");
 
     print_throughput_row("get", &zipf_workload, None);
