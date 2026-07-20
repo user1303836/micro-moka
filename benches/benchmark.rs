@@ -13,6 +13,7 @@ const KEY_SPACE: usize = CAP * KEY_SPACE_MULTIPLIER;
 const HIT_RATIO_OPS: usize = 1_000_000;
 const TAIL_SAMPLES: usize = 2_000;
 const TAIL_CAP: usize = 10_000;
+const HOT_TAIL_SAMPLES: usize = 200;
 
 fn main() {
     let zipf_workload = generate_zipf_workload(OPS_PER_ITER, 1.0, KEY_SPACE, SEED);
@@ -26,8 +27,8 @@ fn main() {
 
     println!("=== Throughput (Mops/sec) | cap={CAP} | Zipf s=1.0 ===");
     println!();
-    println!("| Operation | micro-moka | quick-cache | lru | hashlink | mini-moka | hashmap |");
-    println!("|-----------|-----------|-------------|-----|----------|-----------|---------|");
+    println!("| Operation | micro-moka | quick-cache | lru | hashlink | mini-moka | sieve-cache | senba | hashmap |");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
 
     print_throughput_row("get", &zipf_workload, None);
     print_throughput_row("miss", &negative_workload, None);
@@ -38,7 +39,7 @@ fn main() {
     print_churn_row(&resident_workload);
 
     println!();
-    println!("micro-moka and HashMap use HashDoS-resistant RandomState above; competitors use their native faster defaults.");
+    println!("micro-moka, sieve-cache, and HashMap use HashDoS-resistant RandomState above; other competitors use their native faster defaults. senba uses Slot16.");
     println!(
         "micro-moka get with opt-in aHash: {:.1} Mops/sec",
         bench_get_micro_moka_ahash(&zipf_workload)
@@ -47,8 +48,8 @@ fn main() {
     println!();
     println!("=== Hit Ratio (%) | cap={CAP} | {HIT_RATIO_OPS} ops ===");
     println!();
-    println!("| Distribution | micro-moka | quick-cache | lru | hashlink | mini-moka |");
-    println!("|---|---|---|---|---|---|");
+    println!("| Distribution | micro-moka | quick-cache | lru | hashlink | mini-moka | sieve-cache | senba |");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|");
 
     for (name, s) in [
         ("Zipf s=0.7", 0.7),
@@ -57,13 +58,19 @@ fn main() {
         ("Zipf s=1.2", 1.2),
     ] {
         let workload = generate_zipf_workload(HIT_RATIO_OPS, s, KEY_SPACE, SEED);
-        let (mm, qc, lr, hl, mk) = measure_hit_ratios(&workload);
-        println!("| {name} | {mm:.1} | {qc:.1} | {lr:.1} | {hl:.1} | {mk:.1} |");
+        let ratios = measure_hit_ratios(&workload);
+        println!(
+            "| {name} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} |",
+            ratios[0], ratios[1], ratios[2], ratios[3], ratios[4], ratios[5], ratios[6]
+        );
     }
 
     let uniform_workload = generate_uniform_workload(HIT_RATIO_OPS, KEY_SPACE, SEED);
-    let (mm, qc, lr, hl, mk) = measure_hit_ratios(&uniform_workload);
-    println!("| Uniform | {mm:.1} | {qc:.1} | {lr:.1} | {hl:.1} | {mk:.1} |");
+    let ratios = measure_hit_ratios(&uniform_workload);
+    println!(
+        "| Uniform | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} |",
+        ratios[0], ratios[1], ratios[2], ratios[3], ratios[4], ratios[5], ratios[6]
+    );
 
     print_admission_quality();
     print_hot_eviction_latency();
@@ -103,6 +110,16 @@ fn print_throughput_row(op: &str, workload: &[u64], mixed_ops: Option<&[bool]>) 
         None if op == "get" || op == "miss" => bench_get_mini_moka(workload),
         _ => bench_insert_mini_moka(workload),
     };
+    let sc = match mixed_ops {
+        Some(ops) => bench_mixed_sieve_cache(workload, ops),
+        None if op == "get" || op == "miss" => bench_get_sieve_cache(workload),
+        _ => bench_insert_sieve_cache(workload),
+    };
+    let sb = match mixed_ops {
+        Some(ops) => bench_mixed_senba(workload, ops),
+        None if op == "get" || op == "miss" => bench_get_senba(workload),
+        _ => bench_insert_senba(workload),
+    };
     let hm = match mixed_ops {
         Some(ops) => bench_mixed_hashmap(workload, ops),
         None if op == "get" || op == "miss" => bench_get_hashmap(workload),
@@ -110,8 +127,7 @@ fn print_throughput_row(op: &str, workload: &[u64], mixed_ops: Option<&[bool]>) 
     };
 
     println!(
-        "| {:<9} | {:>9.1} | {:>11.1} | {:>3.1} | {:>8.1} | {:>9.1} | {:>7.1} |",
-        op, mm, qc, lr, hl, mk, hm,
+        "| {op} | {mm:.1} | {qc:.1} | {lr:.1} | {hl:.1} | {mk:.1} | {sc:.1} | {sb:.1} | {hm:.1} |",
     );
 }
 
@@ -121,10 +137,11 @@ fn print_churn_row(workload: &[u64]) {
     let lr = bench_churn_lru(workload);
     let hl = bench_churn_hashlink(workload);
     let mk = bench_churn_mini_moka(workload);
+    let sc = bench_churn_sieve_cache(workload);
+    let sb = bench_churn_senba(workload);
     let hm = bench_churn_hashmap(workload);
     println!(
-        "| {:<9} | {:>9.1} | {:>11.1} | {:>3.1} | {:>8.1} | {:>9.1} | {:>7.1} |",
-        "del+put", mm, qc, lr, hl, mk, hm,
+        "| del+put | {mm:.1} | {qc:.1} | {lr:.1} | {hl:.1} | {mk:.1} | {sc:.1} | {sb:.1} | {hm:.1} |",
     );
 }
 
@@ -228,6 +245,48 @@ fn bench_churn_mini_moka(workload: &[u64]) -> f64 {
         for &key in workload {
             cache.invalidate(&key);
             cache.insert(key, key);
+        }
+    }
+    2.0 * mops(MEASURE_ITERS, start.elapsed())
+}
+
+fn bench_churn_sieve_cache(workload: &[u64]) -> f64 {
+    let mut cache = sieve_cache::SieveCache::new(CAP).unwrap();
+    for key in 0..CAP as u64 {
+        cache.insert(key, key);
+    }
+    for _ in 0..WARMUP_ITERS {
+        for &key in workload {
+            black_box(cache.remove(&key));
+            cache.insert(key, key);
+        }
+    }
+    let start = Instant::now();
+    for _ in 0..MEASURE_ITERS {
+        for &key in workload {
+            black_box(cache.remove(&key));
+            cache.insert(key, key);
+        }
+    }
+    2.0 * mops(MEASURE_ITERS, start.elapsed())
+}
+
+fn bench_churn_senba(workload: &[u64]) -> f64 {
+    let mut cache: senba::Cache<u64, u64, senba::Slot16> = senba::Cache::new(CAP);
+    for key in 0..CAP as u64 {
+        black_box(cache.insert(key, key));
+    }
+    for _ in 0..WARMUP_ITERS {
+        for &key in workload {
+            black_box(cache.remove(&key));
+            black_box(cache.insert(key, key));
+        }
+    }
+    let start = Instant::now();
+    for _ in 0..MEASURE_ITERS {
+        for &key in workload {
+            black_box(cache.remove(&key));
+            black_box(cache.insert(key, key));
         }
     }
     2.0 * mops(MEASURE_ITERS, start.elapsed())
@@ -611,6 +670,140 @@ fn bench_mixed_mini_moka(workload: &[u64], ops: &[bool]) -> f64 {
     mops(MEASURE_ITERS, start.elapsed())
 }
 
+// -- sieve-cache -------------------------------------------------------------
+
+fn bench_get_sieve_cache(workload: &[u64]) -> f64 {
+    let mut cache = sieve_cache::SieveCache::new(CAP).unwrap();
+    for i in 0..CAP as u64 {
+        cache.insert(i, i);
+    }
+    for _ in 0..WARMUP_ITERS {
+        for &key in workload {
+            black_box(cache.get(&key));
+        }
+    }
+    let start = Instant::now();
+    for _ in 0..MEASURE_ITERS {
+        for &key in workload {
+            black_box(cache.get(&key));
+        }
+    }
+    mops(MEASURE_ITERS, start.elapsed())
+}
+
+fn bench_insert_sieve_cache(workload: &[u64]) -> f64 {
+    let mut cache = sieve_cache::SieveCache::new(CAP).unwrap();
+    for i in 0..CAP as u64 {
+        cache.insert(i, i);
+    }
+    for _ in 0..WARMUP_ITERS {
+        for &key in workload {
+            black_box(cache.insert(key, key));
+        }
+    }
+    let start = Instant::now();
+    for _ in 0..MEASURE_ITERS {
+        for &key in workload {
+            black_box(cache.insert(key, key));
+        }
+    }
+    mops(MEASURE_ITERS, start.elapsed())
+}
+
+fn bench_mixed_sieve_cache(workload: &[u64], ops: &[bool]) -> f64 {
+    let mut cache = sieve_cache::SieveCache::new(CAP).unwrap();
+    for i in 0..CAP as u64 {
+        cache.insert(i, i);
+    }
+    for _ in 0..WARMUP_ITERS {
+        for (&key, &is_read) in workload.iter().zip(ops.iter()) {
+            if is_read {
+                black_box(cache.get(&key));
+            } else {
+                black_box(cache.insert(key, key));
+            }
+        }
+    }
+    let start = Instant::now();
+    for _ in 0..MEASURE_ITERS {
+        for (&key, &is_read) in workload.iter().zip(ops.iter()) {
+            if is_read {
+                black_box(cache.get(&key));
+            } else {
+                black_box(cache.insert(key, key));
+            }
+        }
+    }
+    mops(MEASURE_ITERS, start.elapsed())
+}
+
+// -- senba -------------------------------------------------------------------
+
+fn bench_get_senba(workload: &[u64]) -> f64 {
+    let mut cache: senba::Cache<u64, u64, senba::Slot16> = senba::Cache::new(CAP);
+    for i in 0..CAP as u64 {
+        black_box(cache.insert(i, i));
+    }
+    for _ in 0..WARMUP_ITERS {
+        for &key in workload {
+            black_box(cache.get(&key));
+        }
+    }
+    let start = Instant::now();
+    for _ in 0..MEASURE_ITERS {
+        for &key in workload {
+            black_box(cache.get(&key));
+        }
+    }
+    mops(MEASURE_ITERS, start.elapsed())
+}
+
+fn bench_insert_senba(workload: &[u64]) -> f64 {
+    let mut cache: senba::Cache<u64, u64, senba::Slot16> = senba::Cache::new(CAP);
+    for i in 0..CAP as u64 {
+        black_box(cache.insert(i, i));
+    }
+    for _ in 0..WARMUP_ITERS {
+        for &key in workload {
+            black_box(cache.insert(key, key));
+        }
+    }
+    let start = Instant::now();
+    for _ in 0..MEASURE_ITERS {
+        for &key in workload {
+            black_box(cache.insert(key, key));
+        }
+    }
+    mops(MEASURE_ITERS, start.elapsed())
+}
+
+fn bench_mixed_senba(workload: &[u64], ops: &[bool]) -> f64 {
+    let mut cache: senba::Cache<u64, u64, senba::Slot16> = senba::Cache::new(CAP);
+    for i in 0..CAP as u64 {
+        black_box(cache.insert(i, i));
+    }
+    for _ in 0..WARMUP_ITERS {
+        for (&key, &is_read) in workload.iter().zip(ops.iter()) {
+            if is_read {
+                black_box(cache.get(&key));
+            } else {
+                black_box(cache.insert(key, key));
+            }
+        }
+    }
+    let start = Instant::now();
+    for _ in 0..MEASURE_ITERS {
+        for (&key, &is_read) in workload.iter().zip(ops.iter()) {
+            if is_read {
+                black_box(cache.get(&key));
+            } else {
+                black_box(cache.insert(key, key));
+            }
+        }
+    }
+    mops(MEASURE_ITERS, start.elapsed())
+}
+
 // -- hashmap (unbounded baseline) --------------------------------------------
 
 fn bench_get_hashmap(workload: &[u64]) -> f64 {
@@ -682,14 +875,16 @@ fn bench_mixed_hashmap(workload: &[u64], ops: &[bool]) -> f64 {
 // Hit ratio measurement
 // ---------------------------------------------------------------------------
 
-fn measure_hit_ratios(workload: &[u64]) -> (f64, f64, f64, f64, f64) {
-    (
+fn measure_hit_ratios(workload: &[u64]) -> [f64; 7] {
+    [
         hit_ratio_micro_moka(workload),
         hit_ratio_quick_cache(workload),
         hit_ratio_lru(workload),
         hit_ratio_hashlink(workload),
         hit_ratio_mini_moka(workload),
-    )
+        hit_ratio_sieve_cache(workload),
+        hit_ratio_senba(workload),
+    ]
 }
 
 fn hit_ratio_micro_moka(workload: &[u64]) -> f64 {
@@ -752,6 +947,32 @@ fn hit_ratio_mini_moka(workload: &[u64]) -> f64 {
             hits += 1;
         } else {
             cache.insert(key, key);
+        }
+    }
+    hits as f64 / workload.len() as f64 * 100.0
+}
+
+fn hit_ratio_sieve_cache(workload: &[u64]) -> f64 {
+    let mut cache = sieve_cache::SieveCache::new(CAP).unwrap();
+    let mut hits = 0u64;
+    for &key in workload {
+        if cache.get(&key).is_some() {
+            hits += 1;
+        } else {
+            cache.insert(key, key);
+        }
+    }
+    hits as f64 / workload.len() as f64 * 100.0
+}
+
+fn hit_ratio_senba(workload: &[u64]) -> f64 {
+    let mut cache: senba::Cache<u64, u64, senba::Slot16> = senba::Cache::new(CAP);
+    let mut hits = 0u64;
+    for &key in workload {
+        if cache.get(&key).is_some() {
+            hits += 1;
+        } else {
+            black_box(cache.insert(key, key));
         }
     }
     hits as f64 / workload.len() as f64 * 100.0
@@ -887,20 +1108,60 @@ fn weighted_hit_ratio(workload: &[u64], scan_limit: Option<u32>) -> (f64, f64) {
 }
 
 fn print_hot_eviction_latency() {
-    let exact = hot_eviction_latency_micro(false);
-    let budgeted = hot_eviction_latency_micro(true);
-    let quick = hot_eviction_latency_quick_cache();
-    let lru = hot_eviction_latency_lru();
+    let attempts = admission_attempt_latency_micro();
 
     println!();
-    println!("=== Full-cache insertion latency (ns) | cap={TAIL_CAP} | 1% all-hot samples ===");
+    println!("=== Full-cache budgeted admission-attempt latency (ns) | cap={TAIL_CAP} ===");
+    println!();
+    println!(
+        "1% of attempts see an all-visited resident set; other attempts see an unvisited set."
+    );
+    println!("| Outcome | Count | Rate | p50 | p99 | p99.9 | max |");
+    println!("|---|---:|---:|---:|---:|---:|---:|");
+    print_outcome_latency_row("accepted", &attempts.accepted, TAIL_SAMPLES);
+    print_outcome_latency_row("rejected", &attempts.rejected, TAIL_SAMPLES);
+
+    let exact = hot_success_latency_micro_exact();
+    let (eventual, attempt_counts) = hot_success_latency_micro_budgeted();
+    let quick = hot_success_latency_quick_cache();
+    let sieve = hot_success_latency_sieve_cache();
+    let senba = hot_success_latency_senba();
+    let lru = hot_success_latency_lru();
+
+    println!();
+    println!("=== Eventual successful full-cache admission latency (ns) | cap={TAIL_CAP} | all residents visited ===");
     println!();
     println!("| Cache/path | p50 | p99 | p99.9 | max |");
     println!("|---|---:|---:|---:|---:|");
     print_latency_row("micro exact", &exact);
-    print_latency_row("micro budget 16", &budgeted);
+    print_latency_row("micro budget 16, retry to success", &eventual);
     print_latency_row("quick-cache", &quick);
+    print_latency_row("sieve-cache", &sieve);
+    print_latency_row("senba Slot16", &senba);
     print_latency_row("lru", &lru);
+    println!(
+        "micro budget 16 attempts to success: min={}, mean={:.1}, max={}",
+        attempt_counts[0],
+        attempt_counts.iter().sum::<u64>() as f64 / attempt_counts.len() as f64,
+        attempt_counts[attempt_counts.len() - 1]
+    );
+}
+
+struct AdmissionAttemptSamples {
+    accepted: Vec<u128>,
+    rejected: Vec<u128>,
+}
+
+fn print_outcome_latency_row(name: &str, samples: &[u128], total: usize) {
+    println!(
+        "| {name} | {} | {:.1}% | {} | {} | {} | {} |",
+        samples.len(),
+        samples.len() as f64 / total as f64 * 100.0,
+        percentile(samples, 500),
+        percentile(samples, 990),
+        percentile(samples, 999),
+        samples[samples.len() - 1]
+    );
 }
 
 fn print_latency_row(name: &str, samples: &[u128]) {
@@ -918,8 +1179,9 @@ fn percentile(samples: &[u128], per_thousand: usize) -> u128 {
     samples[index]
 }
 
-fn hot_eviction_latency_micro(budgeted: bool) -> Vec<u128> {
-    let mut samples = Vec::with_capacity(TAIL_SAMPLES);
+fn admission_attempt_latency_micro() -> AdmissionAttemptSamples {
+    let mut accepted = Vec::with_capacity(TAIL_SAMPLES);
+    let mut rejected = Vec::with_capacity(TAIL_SAMPLES / 100);
     for sample in 0..TAIL_SAMPLES {
         let mut cache = micro_moka::unsync::Cache::builder()
             .max_capacity(TAIL_CAP as u64)
@@ -936,55 +1198,156 @@ fn hot_eviction_latency_micro(budgeted: bool) -> Vec<u128> {
         }
         let candidate = TAIL_CAP as u64 + sample as u64;
         let start = Instant::now();
-        if budgeted {
-            let _ = black_box(cache.try_insert(candidate, candidate));
+        let result = black_box(cache.try_insert(candidate, candidate));
+        let elapsed = start.elapsed().as_nanos();
+        if result.is_ok() {
+            accepted.push(elapsed);
         } else {
-            cache.insert(candidate, candidate);
+            rejected.push(elapsed);
         }
-        samples.push(start.elapsed().as_nanos());
     }
-    samples.sort_unstable();
-    samples
+    accepted.sort_unstable();
+    rejected.sort_unstable();
+    AdmissionAttemptSamples { accepted, rejected }
 }
 
-fn hot_eviction_latency_quick_cache() -> Vec<u128> {
-    let mut samples = Vec::with_capacity(TAIL_SAMPLES);
-    for sample in 0..TAIL_SAMPLES {
-        let mut cache = quick_cache::unsync::Cache::new(TAIL_CAP);
-        cache.reserve(TAIL_CAP);
+fn hot_success_latency_micro_exact() -> Vec<u128> {
+    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
+    for sample in 0..HOT_TAIL_SAMPLES {
+        let mut cache = micro_moka::unsync::Cache::builder()
+            .max_capacity(TAIL_CAP as u64)
+            .initial_capacity(TAIL_CAP)
+            .build_with_hasher(ahash::RandomState::new());
         for key in 0..TAIL_CAP as u64 {
             cache.insert(key, key);
         }
-        if sample % 100 == 0 {
-            for key in 0..TAIL_CAP as u64 {
-                black_box(cache.get(&key));
-            }
+        for key in 0..TAIL_CAP as u64 {
+            black_box(cache.get(&key));
         }
         let candidate = TAIL_CAP as u64 + sample as u64;
         let start = Instant::now();
         cache.insert(candidate, candidate);
         samples.push(start.elapsed().as_nanos());
+        assert!(cache.contains_key(&candidate));
     }
     samples.sort_unstable();
     samples
 }
 
-fn hot_eviction_latency_lru() -> Vec<u128> {
-    let mut samples = Vec::with_capacity(TAIL_SAMPLES);
-    for sample in 0..TAIL_SAMPLES {
+fn hot_success_latency_micro_budgeted() -> (Vec<u128>, Vec<u64>) {
+    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
+    let mut attempt_counts = Vec::with_capacity(HOT_TAIL_SAMPLES);
+    for sample in 0..HOT_TAIL_SAMPLES {
+        let mut cache = micro_moka::unsync::Cache::builder()
+            .max_capacity(TAIL_CAP as u64)
+            .initial_capacity(TAIL_CAP)
+            .admission_scan_limit(16)
+            .build_with_hasher(ahash::RandomState::new());
+        for key in 0..TAIL_CAP as u64 {
+            cache.insert(key, key);
+        }
+        for key in 0..TAIL_CAP as u64 {
+            black_box(cache.get(&key));
+        }
+        let candidate = TAIL_CAP as u64 + sample as u64;
+        let mut attempts = 0u64;
+        let start = Instant::now();
+        loop {
+            attempts += 1;
+            if cache.try_insert(candidate, candidate).is_ok() {
+                break;
+            }
+        }
+        samples.push(start.elapsed().as_nanos());
+        attempt_counts.push(attempts);
+        assert!(cache.contains_key(&candidate));
+    }
+    samples.sort_unstable();
+    attempt_counts.sort_unstable();
+    (samples, attempt_counts)
+}
+
+fn hot_success_latency_quick_cache() -> Vec<u128> {
+    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
+    for sample in 0..HOT_TAIL_SAMPLES {
+        let mut cache = quick_cache::unsync::Cache::new(TAIL_CAP);
+        cache.reserve(TAIL_CAP);
+        for key in 0..TAIL_CAP as u64 {
+            cache.insert(key, key);
+        }
+        for key in 0..TAIL_CAP as u64 {
+            black_box(cache.get(&key));
+        }
+        let candidate = TAIL_CAP as u64 + sample as u64;
+        let start = Instant::now();
+        cache.insert(candidate, candidate);
+        samples.push(start.elapsed().as_nanos());
+        assert!(cache.get(&candidate).is_some());
+    }
+    samples.sort_unstable();
+    samples
+}
+
+fn hot_success_latency_sieve_cache() -> Vec<u128> {
+    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
+    for sample in 0..HOT_TAIL_SAMPLES {
+        let mut cache = sieve_cache::SieveCache::new(TAIL_CAP).unwrap();
+        for key in 0..TAIL_CAP as u64 {
+            cache.insert(key, key);
+        }
+        for key in 0..TAIL_CAP as u64 {
+            black_box(cache.get(&key));
+        }
+        let candidate = TAIL_CAP as u64 + sample as u64;
+        let start = Instant::now();
+        black_box(cache.insert(candidate, candidate));
+        samples.push(start.elapsed().as_nanos());
+        assert!(cache.contains_key(&candidate));
+    }
+    samples.sort_unstable();
+    samples
+}
+
+fn hot_success_latency_senba() -> Vec<u128> {
+    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
+    for _ in 0..HOT_TAIL_SAMPLES {
+        let mut cache: senba::Cache<u64, u64, senba::Slot16> = senba::Cache::new(TAIL_CAP);
+        let mut candidate = 0u64;
+        while cache.len() < TAIL_CAP {
+            black_box(cache.insert(candidate, candidate));
+            candidate += 1;
+        }
+        let resident_keys = cache.iter().map(|(&key, _)| key).collect::<Vec<_>>();
+        for key in resident_keys {
+            black_box(cache.get(&key));
+        }
+        while cache.contains_key(&candidate) {
+            candidate += 1;
+        }
+        let start = Instant::now();
+        black_box(cache.insert(candidate, candidate));
+        samples.push(start.elapsed().as_nanos());
+        assert!(cache.contains_key(&candidate));
+    }
+    samples.sort_unstable();
+    samples
+}
+
+fn hot_success_latency_lru() -> Vec<u128> {
+    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
+    for sample in 0..HOT_TAIL_SAMPLES {
         let mut cache = lru::LruCache::new(NonZeroUsize::new(TAIL_CAP).unwrap());
         for key in 0..TAIL_CAP as u64 {
             cache.put(key, key);
         }
-        if sample % 100 == 0 {
-            for key in 0..TAIL_CAP as u64 {
-                black_box(cache.get(&key));
-            }
+        for key in 0..TAIL_CAP as u64 {
+            black_box(cache.get(&key));
         }
         let candidate = TAIL_CAP as u64 + sample as u64;
         let start = Instant::now();
         cache.put(candidate, candidate);
         samples.push(start.elapsed().as_nanos());
+        assert!(cache.contains(&candidate));
     }
     samples.sort_unstable();
     samples

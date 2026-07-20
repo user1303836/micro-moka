@@ -689,11 +689,26 @@ mod tests {
         cache.get(&"b");
         cache.get(&"c");
 
-        // Insert "d": SIEVE sweeps from tail backward. "c" is visited (cleared),
-        // "b" is visited (cleared), "a" is unvisited -> evicted.
+        // Insert "d": SIEVE sweeps from the oldest entry toward newer entries.
+        // "a" is unvisited, so it is evicted before visited "b" and "c".
         cache.insert("d", "david");
         assert_eq!(cache.entry_count(), 3);
         assert_eq!(cache.get(&"a"), None);
+        assert!(cache.contains_key(&"b"));
+        assert!(cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
+    }
+
+    #[test]
+    fn sieve_evicts_oldest_when_every_resident_is_unvisited() {
+        let mut cache = Cache::new(3);
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+
+        cache.insert("d", "david");
+
+        assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert!(cache.contains_key(&"c"));
         assert!(cache.contains_key(&"d"));
@@ -713,7 +728,7 @@ mod tests {
         cache.get(&"c");
 
         // Insert "d": SIEVE sweeps and clears all visited bits, then wraps
-        // around and evicts the first (now-unvisited) entry from the tail.
+        // around and evicts the oldest now-unvisited entry.
         cache.insert("d", "david");
         assert_eq!(cache.entry_count(), 3);
         assert!(cache.contains_key(&"d"));
@@ -1129,8 +1144,7 @@ mod tests {
         cache.peek(&"b");
         cache.peek(&"c");
 
-        // None of the entries are visited, so SIEVE evicts the first unvisited
-        // entry from the tail (insertion order: a, b, c; sweep starts at tail=c).
+        // None of the entries are visited, so SIEVE evicts the oldest entry.
         cache.insert("d", "david");
 
         // One entry was evicted to make room for "d".
@@ -1191,17 +1205,20 @@ mod tests {
         cache.insert("b", "bob");
         cache.insert("c", "cindy");
 
-        // No entries visited. First eviction should evict from tail end.
+        // No entries visited. First eviction should evict the oldest entry.
         cache.insert("d", "david");
         assert_eq!(cache.entry_count(), 3);
+        assert!(!cache.contains_key(&"a"));
 
         // Insert another to trigger second eviction. Hand should have advanced.
         cache.insert("e", "eve");
         assert_eq!(cache.entry_count(), 3);
+        assert!(!cache.contains_key(&"b"));
 
         // Insert a third to trigger third eviction.
         cache.insert("f", "frank");
         assert_eq!(cache.entry_count(), 3);
+        assert!(!cache.contains_key(&"c"));
     }
 
     #[test]
@@ -1451,6 +1468,27 @@ mod tests {
         assert_eq!(cache.try_insert(6, 6), Ok(()));
         assert_eq!(cache.entry_count(), 4);
         assert!(cache.contains_key(&6));
+    }
+
+    #[test]
+    fn removing_the_saved_hand_resumes_toward_newer_entries() {
+        let mut cache = Cache::builder()
+            .max_capacity(4)
+            .admission_scan_limit(1)
+            .build();
+        for key in 0..4 {
+            cache.insert(key, key);
+            cache.get(&key);
+        }
+
+        assert_eq!(cache.try_insert(4, 4), Err((4, 4)));
+        assert_eq!(cache.remove(&1), Some(1));
+        cache.insert(1, 1);
+
+        assert_eq!(cache.try_insert(5, 5), Err((5, 5)));
+        assert_eq!(cache.try_insert(6, 6), Err((6, 6)));
+        assert_eq!(cache.try_insert(7, 7), Ok(()));
+        assert!(cache.contains_key(&7));
     }
 
     #[test]

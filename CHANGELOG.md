@@ -11,14 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `Cache::try_insert`, a scan-budgeted admission path that returns a candidate when a full cache has no unvisited SIEVE victim within the configured budget.
 - Added `CacheBuilder::admission_scan_limit` and `Policy::admission_scan_limit`; the default budget is 16 inspected entries and a zero budget freezes new-key admission while full.
-- Added benchmark coverage for negative lookups, updates, delete/reinsert churn, request and synthetic byte hit ratios, short-scan resistance, admission rejection counts, and full-cache insertion percentiles.
-- Added `docs/cache-positioning.md` with ecosystem research, methodology, representative results, limitations, and the rationale for Micro Moka's latency-density positioning.
+- Added benchmark coverage for negative lookups, updates, delete/reinsert churn, request and synthetic byte hit ratios, scan filtering, admission outcome rates, and matched successful-admission percentiles.
+- Added direct, exactly pinned benchmark comparisons with `sieve-cache` 1.1.6 and `senba` 0.2.0.
+- Added `docs/cache-positioning.md` with ecosystem research, methodology, representative results, limitations, and the rationale for Micro Moka's safe, predictable admission positioning.
 
 ### Changed
 
 - Packed the SIEVE visited bit into a nonzero predecessor link, reducing the `u64` key/value slab slot from 40 to 32 bytes while preserving safe Rust and the vacant-slot niche.
 - Reworked the README and crate documentation around exact versus scan-budgeted admission and documented where feature-rich Rust caches are a better fit.
 - Added stable CI compilation and lint coverage for the opt-in benchmark target.
+
+### Fixed
+
+- Corrected SIEVE traversal to start at the oldest resident and move toward newer residents, preserving FIFO eviction when every resident is unvisited.
+- Separated accepted and rejected `try_insert` latency distributions and added retry-through-success evidence so rejected admission attempts are not compared with successful competitor insertions.
 
 ## [1.1.0] - 2026-07-20
 

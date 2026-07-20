@@ -4,7 +4,7 @@ version = "1.2.0"
 edition = "2021"
 rust-version = "1.76"
 
-description = "A predictable, memory-dense single-threaded cache with SIEVE eviction"
+description = "A predictable, safe-Rust single-threaded cache with bounded SIEVE admission"
 license = "MIT OR Apache-2.0"
 # homepage = "https://"
 documentation = "https://docs.rs/micro-moka/"
@@ -18,13 +18,15 @@ exclude = [".circleci", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 hashbrown = { version = "0.16", default-features = false, features = ["inline-more"] }
 
 [target.'cfg(bench_deps)'.dev-dependencies]
-quick_cache = "0.7"
-lru = "0.18"
-hashlink = "0.12"
-mini-moka = "0.10"
-rand = "0.10"
-rand_distr = "0.6"
-ahash = "0.8.12"
+quick_cache = "=0.7.0"
+lru = "=0.18.1"
+hashlink = "=0.12.1"
+mini-moka = "=0.10.3"
+sieve-cache = "=1.1.6"
+senba = "=0.2.0"
+rand = "=0.10.2"
+rand_distr = "=0.6.0"
+ahash = "=0.8.12"
 
 [[bench]]
 name = "benchmark"

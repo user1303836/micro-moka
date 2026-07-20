@@ -200,8 +200,7 @@ impl IndexDeque {
 
     fn advance_hand_past<K, V>(&mut self, slab: &Slab<K, V>, index: u32) {
         if self.hand == index {
-            let prev = slab.get(index).prev();
-            self.hand = prev;
+            self.hand = slab.get(index).next;
         }
     }
 
@@ -221,12 +220,12 @@ impl IndexDeque {
         let mut current = if self.hand != SENTINEL {
             self.hand
         } else {
-            self.tail
+            self.head
         };
 
         for _ in 0..scan_limit {
             if current == SENTINEL {
-                current = self.tail;
+                current = self.head;
                 if current == SENTINEL {
                     return None;
                 }
@@ -235,11 +234,10 @@ impl IndexDeque {
             let entry = slab.get_mut(current);
             if entry.is_visited() {
                 entry.clear_visited();
-                let prev = entry.prev();
-                current = if prev != SENTINEL { prev } else { self.tail };
+                let next = entry.next;
+                current = if next != SENTINEL { next } else { self.head };
             } else {
-                let prev = slab.get(current).prev();
-                self.hand = prev;
+                self.hand = slab.get(current).next;
                 let victim = current;
                 self.unlink(slab, victim);
                 return Some(victim);

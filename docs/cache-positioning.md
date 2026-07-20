@@ -1,68 +1,90 @@
 # Cache Positioning and Benchmarks
 
-This document records the evidence behind Micro Moka's positioning as a
-predictable, memory-dense, single-threaded cache. It is a benchmark report, not
-a universal ranking: cache results depend on key type, hasher, capacity ratio,
-access distribution, object size, expiry needs, and whether admission rejection
-is acceptable.
+This report treats cache design as a multi-objective optimization problem. A
+cache can improve one workload or operational axis while regressing another, so
+the evidence below is a positioning argument rather than a universal ranking.
+Results depend on key type, hasher, capacity ratio, access distribution, object
+size, expiry needs, and whether admission rejection is acceptable.
 
-## Ecosystem Research
+Research and source inspection were performed on 2026-07-20. The benchmark was
+rerun after correcting Micro Moka's SIEVE traversal to start at the oldest
+resident and advance toward newer residents, as specified by the paper.
 
-Research was performed on 2026-07-20 against the repositories and released
-versions below.
+## Objectives and Tradeoffs
+
+| Objective | What improves it | Typical cost |
+|---|---|---|
+| Average read/write latency | Fast hashing, compact lookup metadata, simple policy work | Weaker HashDoS protection, unsafe/SIMD specialization, or lower policy quality |
+| Tail latency and predictability | Constant-time policies, bounded scans, sharding, admission rejection | Lower global policy fidelity or delayed/rejected candidates |
+| Request and byte hit ratio | Better admission/eviction models, weights, more history | More metadata, hashing, counters, and maintenance work |
+| Memory density | Fixed slots, packed metadata, compact indices | Entry-size limits, unsafe layout code, or wasted padding |
+| Expiration and loading | TTL, TTI, variable expiry, background cleanup, loaders | Clock reads, scheduling/index state, dependencies, and a larger API |
+| Operational simplicity | Single ownership, no workers, observable outcomes | No concurrency, automatic expiry, or built-in metrics |
+
+Negative caching itself needs no specialized policy: store `Option<T>` or a
+domain result enum. Negative lookup speed is nevertheless measured because a
+miss-heavy workload can be a cache's dominant path.
+
+## Rust Ecosystem Review
 
 | Cache | Policy and relevant capabilities | Cost or tradeoff relative to Micro Moka |
 |---|---|---|
-| [`quick_cache` 0.7.0][quick-cache] | Modified CLOCK-Pro/S3-FIFO; sync and unsync; weighted capacity, ghost history, pinning, lifecycle hooks | More policy state and features; its unsync resident still uses an atomic reference counter, and eviction can walk hot/cold rings |
-| [`moka` 0.12.15][moka] | Concurrent Window TinyLFU; weighted capacity, TTL, TTI, variable expiry, listeners and loading APIs | Much broader operational surface and dependency footprint; optimized for concurrency and feature completeness |
-| [`mini-moka` 0.10.3][mini-moka] | Window TinyLFU; sync and unsync | Frequency-sketch and multi-region policy work buys higher Zipf hit ratio at substantially lower single-thread throughput in this suite |
-| [`lru` 0.18.1][lru] | Strict O(1) LRU, map-like API, `no_std` support | Relinks on hits and uses a separately allocated pointer-linked node per entry; no scan resistance |
-| [`hashlink` 0.12.1][hashlink] | Linked hash map and LRU wrapper | Strong general-purpose update/delete throughput; strict LRU rather than a scan-resistant policy |
-| [`stretto` 0.9.0][stretto] | Concurrent TinyLFU admission plus sampled LFU eviction; weighted capacity, TTL and metrics | Probabilistic frequency structures and asynchronous policy machinery target high-contention services |
-| [`foyer` 0.22][foyer] | Concurrent in-memory S3-FIFO/LFU plus hybrid disk caching and observability | Designed for large concurrent and hybrid systems rather than a minimal single-owner cache |
+| [`quick_cache` 0.7.0][quick-cache] | Modified CLOCK-Pro/S3-FIFO; sync and unsync; weighted capacity, ghost history, pinning, and lifecycle hooks | More features and policy state; its unsync resident representation includes atomic reference state and eviction can walk policy rings |
+| [`moka` 0.12.15][moka] | Concurrent Window TinyLFU; weighted capacity, TTL, TTI, variable expiry, listeners, loaders, and async APIs | Broad operational surface and dependency footprint optimized for concurrent, feature-rich services |
+| [`mini-moka` 0.10.3][mini-moka] | Sync and unsync Window TinyLFU; weighting, TTL, and TTI | Frequency sketch, multi-region policy, clocks, and expiry state trade throughput and density for features and policy quality |
+| [`sieve-cache` 1.1.6][sieve-cache] | Published core single-threaded cache plus sync/sharded wrappers; vector nodes and a standard `HashMap` | Requires `K: Clone` and stores the key in both structures; the released source appends new nodes and starts at that newest node, so its measured policy is not reference SIEVE orientation |
+| [`senba` 0.2.0][senba] | Single-threaded, sharded SIEVE-like policy; fixed 16/32/64-byte slots; at most 64 residents per shard; bit-parallel eviction and optional AVX2 lookup | Excellent density and bounded per-shard policy work, but uses substantial unsafe layout/SIMD code, requires Rust 1.85, defaults to non-HashDoS xxh3, and cannot directly store entries larger than 64 bytes |
+| [`lru` 0.18.1][lru] | Strict O(1) LRU, map-like API, and `no_std` support | Relinks on hits and separately allocates pointer-linked nodes; no scan bypass |
+| [`hashlink` 0.12.1][hashlink] | Linked hash map and LRU wrapper | Strong update/delete throughput; strict LRU rather than a scan-filtering admission path |
+| [`stretto` 0.9.0][stretto] | Concurrent TinyLFU admission, sampled LFU eviction, weighted capacity, TTL, and metrics | Probabilistic and asynchronous policy machinery targets high-contention services |
+| [`foyer` 0.22.3][foyer] | Concurrent in-memory S3-FIFO/LFU plus hybrid disk caching and observability | Designed for large concurrent and hybrid systems rather than a minimal single-owner cache |
 
-Source inspection matters here. For example, `quick_cache` stores slab tokens in
-a `HashTable`, resident/placeholder/ghost variants in a linked slab, three ring
-heads, hot/cold weights, and an `AtomicU16` reference counter. `lru` stores
-`NonNull` pointers in its hash map and allocates each key/value node separately.
-Micro Moka stores one `u32` slab index per table bucket and keeps the key, value,
-hash, packed visited/predecessor word, and successor in one contiguous slot.
+The direct comparisons change the claim. Micro Moka is not the raw density
+leader: Senba's `Slot16` stores a `u64`/`u64` pair in a 16-byte arena stride,
+whereas Micro Moka's packed slab slot is 32 bytes before its hash-table index.
+Nor is it the unconditional-admission tail-latency leader: Senba bounds each
+shard at 64 entries and LRU has constant policy work.
 
-The [SIEVE paper][sieve] frames cache policy around efficiency and throughput,
-evaluates request and byte miss ratios on 1,559 traces, and reports one visited
-bit plus a hand on top of queue links. Its exact algorithm continues walking
-while entries are visited. That work is amortized, but neither the paper's
-pseudocode nor the reference `libCacheSim` implementation places a bound on one
-eviction sweep. Micro Moka's `try_insert` fills that tail-latency gap by exposing
-a deterministic scan budget and an observable rejection result.
+The ecosystem is less well served at a different intersection: safe Rust,
+Rust 1.76 support, arbitrary-size key/value storage, HashDoS-resistant defaults,
+a global reference-SIEVE order, and an explicit per-attempt scan bound that
+returns ownership of a deferred candidate. Among the reviewed caches, Micro
+Moka is the only one combining those properties.
 
-## Chosen Pareto Point
+The [SIEVE paper][sieve] evaluates request and byte miss ratios on 1,559 traces.
+It inserts at the newest end, starts the eviction hand at the oldest end, and
+moves toward newer entries. The paper also notes that SIEVE is not universally
+scan-resistant. Exact SIEVE keeps walking while entries are visited, so its work
+is amortized but not bounded for one insertion. Micro Moka retains that exact
+path and adds optional, observable admission backpressure.
 
-The project does not attempt to beat every cache on every axis. The implemented
-point combines:
+## Implemented Pareto Point
 
-1. a normal exact-SIEVE path for callers that require unconditional admission;
-2. a scan-budgeted path that inspects at most `admission_scan_limit` entries and
-   preserves ownership of a rejected candidate;
-3. a persistent hand so rejected attempts deamortize, rather than restart, a hot
-   sweep;
-4. a packed nonzero predecessor/visited word so `Option<SlabEntry<u64, u64>>`
-   occupies 32 bytes rather than v1.1.0's 40 bytes;
+The v1.2 design combines:
+
+1. `insert`, an exact/global SIEVE path for unconditional admission;
+2. `try_insert`, which examines at most `admission_scan_limit` residents and
+   returns `Err((K, V))` without losing the candidate when the budget expires;
+3. a persistent hand, so retries continue a sweep instead of restarting it;
+4. a packed nonzero predecessor/visited word, reducing
+   `Option<SlabEntry<u64, u64>>` from 40 to 32 bytes;
 5. no new production dependency, unsafe block, clock read, atomic, background
-   worker, or expiry index.
+   worker, expiry index, or internal metrics object.
 
-This is synergistic rather than a latency-only optimization. Rejecting a
-candidate when the budget is exhausted both caps policy work and protects the
-recently visited resident set from short scans. Packing metadata reduces memory
-and improves the number of entries that fit in a CPU cache line working set.
+Budgeted admission is not a faster successful insertion. It is a scheduling and
+backpressure primitive: each call has bounded policy work, while the caller
+chooses whether to retry, bypass the cache, or drop/count the candidate. On a
+fully visited 10,000-entry cache, budget 16 requires 626 calls to achieve the
+same successful admission that exact SIEVE performs in one call. Total measured
+policy time is similar; the work is split into predictable pieces.
 
-The default budget of 16 was selected because the synthetic Zipf and uniform
-traces below remain within 0.03 percentage points of exact SIEVE while the
-all-hot path is bounded to 16 inspected entries. Budget 1 increased Zipf hit
-ratio slightly but rejects more aggressively; budget 64 adapted more readily but
-protected less of the hot set during short scans.
+The default of 16 is a workload-informed compromise, not a universal optimum.
+Across the deterministic Zipf and uniform workloads below it stays within 0.03
+percentage points of exact SIEVE. On the hot-set workload, 32-key scan bursts
+are rejected before they can displace the repeatedly revisited residents. A
+budget of 64 admits enough of that scan to collapse the benefit.
 
-## Method
+## Reproducible Method
 
 Run the complete suite with:
 
@@ -70,103 +92,143 @@ Run the complete suite with:
 RUSTFLAGS='--cfg bench_deps' cargo bench --bench benchmark
 ```
 
-The committed harness uses deterministic seed 42 and compares Micro Moka with
-`quick_cache`, `lru`, `hashlink`, `mini-moka`, and an unbounded `HashMap`.
+All evidence-bearing direct dependencies are pinned exactly in `Cargo.toml`:
+`quick_cache` 0.7.0, `lru` 0.18.1, `hashlink` 0.12.1, `mini-moka` 0.10.3,
+`sieve-cache` 1.1.6, `senba` 0.2.0, `rand` 0.10.2, `rand_distr` 0.6.0, and
+`ahash` 0.8.12. The harness uses deterministic seed 42.
 
 - Throughput: capacity 1,000, key space 10,000, 10,000 operations per batch,
   500 warm-up batches, and 2,000 measured batches.
 - Hit ratio: 1,000,000 requests at capacity 1,000 over Zipf and uniform traces.
-- Short-scan resistance: a warmed 1,000-entry hot set alternates with bursts of
-  32 unique keys.
-- Byte hit ratio: deterministic synthetic object sizes from 1 to 1,024 bytes.
-- Tail latency: 2,000 independently constructed caches at capacity 10,000; 1%
-  of samples visit every resident before timing one full-cache insert. The
-  harness reports p50, p99, p99.9 and max from `Instant` samples.
-- Density: a production unit test fixes the u64/u64 slab-slot layout at 32 bytes
-  on supported CI targets.
+- Scan filtering: a warmed 1,000-entry hot set alternates with 32 unique keys.
+- Byte hit ratio: deterministic synthetic object sizes from 1 to 1,024 bytes;
+  object size is measured but does not influence entry-bounded eviction.
+- Admission-attempt latency: 2,000 independently built, full 10,000-entry
+  caches. Exactly 1% have every resident visited. Accepted and rejected
+  outcomes are reported separately with counts and rates.
+- Matched successful admission: 200 independently built full caches with every
+  resident visited. Every row ends with the candidate resident. The budgeted
+  row includes all retries through success.
+- Density: a production unit test fixes Micro Moka's `u64`/`u64` slab-slot
+  layout at 32 bytes on supported CI targets. Senba's 16-byte stride is a public
+  type-level contract.
 
-Native-default throughput is intentionally labeled as such. Micro Moka and
-`HashMap` use HashDoS-resistant `RandomState`; the other benchmarked caches use
-their faster crate defaults. An additional Micro Moka row uses opt-in `aHash` to
-show the impact of hasher choice. Policy comparisons within Micro Moka use the
-same hasher.
+Micro Moka, `sieve-cache`, and `HashMap` use `RandomState` in the native-default
+throughput table. Other caches use their crate defaults; Senba uses `Slot16` and
+xxh3. The extra Micro Moka aHash measurement isolates hasher cost. Policy
+comparisons within Micro Moka use the same aHash state.
 
 ## Representative Results
 
 Measured on an Apple M4 with 16 GiB RAM, macOS 15.7.3, Rust 1.94.0. Times are
 nanoseconds and throughput is millions of API operations per second. These are
-single-run local results; rerun on the deployment target before making a sizing
-decision.
+single-run local results; rerun on the deployment target. Senba's README states
+that its SIMD lookup is x86_64 AVX2-only, so this Apple Silicon run uses its
+scalar fallback.
 
 ### Native-default throughput
 
-| Operation | micro-moka | quick-cache | lru | hashlink | mini-moka | HashMap |
+| Operation | micro-moka | quick-cache | lru | hashlink | mini-moka | sieve-cache | senba | HashMap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Zipf get | 193.0 | 624.9 | 438.8 | 455.3 | 34.0 | 232.8 | 43.2 | 236.2 |
+| Negative lookup | 216.1 | 743.7 | 829.5 | 826.1 | 48.6 | 247.5 | 32.4 | 249.2 |
+| Zipf insert/update | 71.1 | 167.6 | 162.7 | 155.6 | 20.4 | 64.8 | 39.6 | 195.0 |
+| Resident update | 81.0 | 325.5 | 335.5 | 318.0 | 21.0 | 192.9 | 38.4 | 205.1 |
+| Mixed 95% read | 190.3 | 554.8 | 349.1 | 367.1 | 34.6 | 193.1 | 44.4 | 206.1 |
+| Mixed 50% read | 127.2 | 294.5 | 248.5 | 254.7 | 26.4 | 90.1 | 43.9 | 208.7 |
+| Delete + reinsert | 65.6 | 97.6 | 88.1 | 227.6 | 23.8 | 58.5 | 23.2 | 216.2 |
+
+Micro Moka with opt-in aHash measured 618.8 million gets/s on the same Zipf
+workload, 3.2 times its secure-default result. Cross-cache throughput claims
+that do not account for hashers are not credible.
+
+### Request and byte hit ratio
+
+| Distribution | micro exact | quick-cache | lru | mini-moka | sieve-cache 1.1.6 | senba |
 |---|---:|---:|---:|---:|---:|---:|
-| Zipf get | 167.7 | 618.8 | 442.4 | 378.0 | 32.5 | 232.5 |
-| Negative lookup | 212.4 | 682.1 | 885.7 | 810.1 | 48.7 | 264.4 |
-| Zipf insert/update mix | 45.4 | 139.2 | 97.3 | 117.0 | 20.2 | 183.1 |
-| Resident update | 117.4 | 329.0 | 346.9 | 316.6 | 21.0 | 205.0 |
-| Mixed 95% read | 160.6 | 522.7 | 380.6 | 398.2 | 33.1 | 209.4 |
-| Mixed 50% read | 99.5 | 303.3 | 233.9 | 241.8 | 26.1 | 214.0 |
-| Delete + reinsert | 65.5 | 98.2 | 75.0 | 203.6 | 22.5 | 213.8 |
+| Zipf 0.7 | 43.8% | 43.8% | 32.9% | 42.5% | 34.1% | 43.3% |
+| Zipf 0.9 | 64.5% | 64.6% | 55.6% | 63.9% | 56.8% | 64.1% |
+| Zipf 1.0 | 74.5% | 74.5% | 67.5% | 74.1% | 68.5% | 74.2% |
+| Zipf 1.2 | 89.3% | 89.4% | 86.1% | 89.3% | 86.6% | 89.2% |
+| Uniform | 10.0% | 10.0% | 10.0% | 10.0% | 10.0% | 10.0% |
 
-Micro Moka with opt-in `aHash` measured 578.5 M gets/s on the same Zipf get
-workload. The 3.4x difference from its secure default is why cross-cache claims
-that ignore hashers are not credible.
+The released `sieve-cache` 1.1.6 result must not be interpreted as exact-SIEVE
+quality because its inspected source traverses from the newest end. Micro Moka's
+corrected exact policy now matches quick-cache on Zipf 1.0 in this synthetic
+suite; neither result predicts every production trace.
 
-### Request hit ratio
+| Workload | micro exact | micro budget 16 |
+|---|---:|---:|
+| Zipf 0.7 | 43.77% | 43.80% |
+| Zipf 1.0 | 74.50% | 74.52% |
+| Zipf 1.2 | 89.30% | 89.31% |
+| Uniform | 9.97% | 9.98% |
+| Hot set + 32-key scans | 0.11% | 96.81% |
 
-| Distribution | micro exact | micro budget 16 | quick-cache | lru | mini-moka |
-|---|---:|---:|---:|---:|---:|
-| Zipf 0.7 | 34.53% | 34.52% | 43.8% | 32.9% | 42.5% |
-| Zipf 1.0 | 68.87% | 68.85% | 74.5% | 67.5% | 74.1% |
-| Zipf 1.2 | 86.78% | 86.79% | 89.4% | 86.1% | 89.3% |
-| Uniform | 9.99% | 9.99% | 10.0% | 10.0% | 10.0% |
-| Hot set + 32-key scans | 90.62% | 96.81% | — | — | — |
+Budget 16 rejected 30,944 candidates on the hot-set/scan workload. That result
+is deliberate bypass, not free hit-ratio improvement: callers must have a valid
+fallback for rejected values. Budget 64 rejected only 15 candidates and matched
+exact SIEVE's 0.11% on this workload.
 
-On the Zipf 1.0 trace with synthetic object sizes, exact SIEVE measured 68.87%
-request hit ratio and 56.43% byte hit ratio; budget 16 measured 68.85% and
-56.39%. Micro Moka remains entry-bounded and does not use object size when
-choosing a victim, so byte hit ratio can diverge from request hit ratio.
+With synthetic 1-1,024-byte objects on Zipf 1.0, exact SIEVE measured 74.50%
+request hit ratio and 64.12% byte hit ratio; budget 16 measured 74.52% and
+64.18%. Micro Moka is not weight-aware, so these byte results are observations,
+not a weighted-eviction capability.
 
-### Full-cache insertion latency
+### Admission latency and outcomes
+
+One budgeted call, with 1% all-visited resident sets:
+
+| Outcome | Count | Rate | p50 | p99 | p99.9 | max |
+|---|---:|---:|---:|---:|---:|---:|
+| Accepted | 1,980 | 99.0% | 42 | 84 | 209 | 1,125 |
+| Rejected | 20 | 1.0% | 83 | 84 | 84 | 84 |
+
+This table does not compare rejected work with successful competitor inserts.
+The matched-outcome table below times eventual success after every resident has
+been visited:
 
 | Cache/path | p50 | p99 | p99.9 | max |
 |---|---:|---:|---:|---:|
-| Micro Moka exact SIEVE | 42 | 84 | 8,416 | 14,583 |
-| Micro Moka budget 16 | 42 | 84 | 125 | 167 |
-| quick-cache | 41 | 84 | 24,125 | 24,917 |
-| lru | 41 | 42 | 84 | 167 |
+| Micro Moka exact | 10,833 | 20,375 | 21,125 | 23,958 |
+| Micro Moka budget 16, retry through success | 10,959 | 18,250 | 19,500 | 19,833 |
+| quick-cache | 23,875 | 26,750 | 28,334 | 28,834 |
+| sieve-cache 1.1.6 | 5,042 | 5,791 | 6,292 | 6,625 |
+| senba Slot16 | 41 | 83 | 84 | 208 |
+| lru | 41 | 42 | 83 | 84 |
 
-The key result is structural: `try_insert` cannot inspect more than the configured
-number of SIEVE entries. The measured p99.9 reduction confirms that the bound is
-visible end to end on this workload, while strict LRU remains an excellent choice
-when scan resistance and admission control are unnecessary.
+Budget 16 took exactly 626 attempts in every matched sample. Its value is the
+hard per-call inspection limit and explicit rejection, not lower total latency
+to eventual success. Senba and LRU are better choices when unconditional
+admission tail latency dominates and their other tradeoffs are acceptable.
 
 ## Limitations and Rejected Directions
 
-- The synthetic harness is deterministic and reproducible but is not a
-  substitute for production traces. It does not model allocator contention,
-  large heap-owned values, backend miss cost, or multi-thread sharing.
+- Synthetic deterministic workloads expose controlled mechanisms but do not
+  replace production traces. The suite omits allocator contention, large
+  heap-owned values, backend miss cost, and multi-thread sharing.
 - Per-operation `Instant` measurement has timer overhead and limited resolution.
-  Percentiles should be treated as comparative evidence, not universal service
-  level objectives.
-- SIEVE is not the hit-ratio leader on these Zipf traces. S3-FIFO and TinyLFU
-  spend more state and policy work to gain 2.5-9.3 percentage points.
+  Percentiles are comparative evidence, not universal service objectives; the
+  rejected distribution has only 20 samples.
+- Fixed-size entry capacity can misrepresent memory use. Micro Moka does not
+  account for heap allocations owned by keys/values and does not optimize byte
+  hit ratio.
 - A TinyLFU sketch was rejected for this positioning because it reintroduces
-  counters, aging, multiple hash derivations, and an admission comparison on hot
-  paths already removed from Micro Moka.
+  counters, aging, multiple hash derivations, and admission comparisons already
+  removed from Micro Moka's hot paths.
 - Weighted eviction and expiration were rejected because they add per-entry
-  weight/deadline state and cleanup or clock machinery. `quick_cache`, `moka`,
-  `stretto`, and `foyer` already serve those requirements well.
-- Negative caching does not need a specialized structure: use `Option<T>` (or a
-  domain result enum) as the value. Negative-lookup throughput is measured
-  explicitly above.
+  weight/deadline state, clock reads, cleanup, and policy coupling. `quick_cache`,
+  `mini-moka`, `moka`, `stretto`, and `foyer` serve those requirements.
+- Sharding or fixed slots could beat Micro Moka on density and admission tail,
+  as Senba demonstrates, but would give up the chosen global policy, arbitrary
+  entry size, or safe-Rust implementation.
 
 [sieve]: https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo
 [quick-cache]: https://github.com/arthurprs/quick-cache
 [moka]: https://github.com/moka-rs/moka
 [mini-moka]: https://github.com/moka-rs/mini-moka
+[sieve-cache]: https://github.com/jedisct1/rust-sieve-cache
+[senba]: https://github.com/saka1/senba-cache
 [lru]: https://github.com/jeromefroe/lru-rs
 [hashlink]: https://github.com/djc/hashlink
 [stretto]: https://github.com/al8n/stretto

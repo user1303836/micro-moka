@@ -3,8 +3,8 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Micro Moka is a predictable, memory-dense cache library for Rust. Micro Moka
-//! is a fork of [Mini Moka][mini-moka-git], stripped down to the bare essentials.
+//! Micro Moka is a predictable, safe-Rust cache library. Micro Moka is a fork
+//! of [Mini Moka][mini-moka-git], stripped down to the bare essentials.
 //!
 //! Micro Moka provides an in-memory, non-thread-safe cache implementation for
 //! single thread applications.
