@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-07-20
+
+### Added
+
+- Made cache iterators exact-size and fused, providing accurate `size_hint()` and `len()` values even when the slab contains vacant slots.
+
+### Changed
+
+- Removed the unnecessary `Clone` requirement from custom cache hashers.
+- Updated the crate to the Rust 2021 edition while retaining Rust 1.76.0 support.
+- Removed the unused, test-only W-TinyLFU frequency sketch, its Kani workflow, empty legacy test harnesses, four unused development dependencies, and stale package assets.
+- Updated the README and API documentation to describe the current SIEVE implementation and stable `1.x` installation.
+- Modernized GitHub Actions and repaired the MSRV, lint, cross-compilation, Miri, and audit workflows.
+- Updated all benchmark dependencies to their current releases.
+
+### Fixed
+
+- Kept cache accounting and eviction state consistent if an entry's destructor panics during invalidation, predicate invalidation, or eviction.
+- Preserved both hash table and slab allocation capacity across `invalidate_all()`.
+- Removed duplicate slab lookups from successful `get()` and `get_or_insert_with()` operations.
+
 ## [1.0.0] - 2026-04-07
 
 ### Changed
@@ -15,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added `get_or_insert_with()` API that combines cache lookup and insertion into a single operation with one hash computation and one probe sequence, eliminating the redundant double-lookup when using separate `get()` then `insert()` calls. The closure is only called on cache miss. On hit, the entry is marked as visited for SIEVE eviction.
+- Added `get_or_insert_with()` API that combines cache lookup and insertion with one hash computation and one fewer lookup than separate `get()` and `insert()` calls. The closure is only called on cache miss. On hit, the entry is marked as visited for SIEVE eviction.
 
 ## [0.1.21] - 2026-03-01
 

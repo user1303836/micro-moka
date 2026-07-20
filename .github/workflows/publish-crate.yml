@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -32,9 +32,24 @@ jobs:
       - name: Read crate metadata
         id: meta
         run: |
-          echo "crate_name=$(.github/scripts/cargo-package-field.sh Cargo.toml name)" >> "$GITHUB_OUTPUT"
-          echo "version=$(.github/scripts/cargo-package-field.sh Cargo.toml version)" >> "$GITHUB_OUTPUT"
-          echo "tag=v$(.github/scripts/cargo-package-field.sh Cargo.toml version)" >> "$GITHUB_OUTPUT"
+          {
+            echo "crate_name=$(.github/scripts/cargo-package-field.sh Cargo.toml name)"
+            echo "version=$(.github/scripts/cargo-package-field.sh Cargo.toml version)"
+            echo "tag=v$(.github/scripts/cargo-package-field.sh Cargo.toml version)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate existing release tag
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+            TAG_COMMIT="$(git rev-list -n 1 "${TAG}")"
+            if [ "${TAG_COMMIT}" != "${GITHUB_SHA}" ]; then
+              echo "${TAG} already points to ${TAG_COMMIT}, not ${GITHUB_SHA}." >&2
+              exit 1
+            fi
+          fi
 
       - name: Validate crates.io token presence
         env:

@@ -5,9 +5,10 @@
 [![docs][docs-badge]][docs]
 [![license][license-badge]](#license)
 
-A fast, lightweight, single-threaded cache for Rust. Forked from [Mini Moka][mini-moka-git] and stripped down to the essentials: no async, no concurrency overhead, no weight-based eviction, no TTL. Just a bounded cache with the [W-TinyLFU][tiny-lfu] eviction policy from [Caffeine][caffeine-git] -- the same algorithm that powers some of the highest hit-ratio caches in production.
-
-The goal is simple: **be the fastest single-threaded cache in Rust**.
+A fast, lightweight, single-threaded cache for Rust. Micro Moka is forked from
+[Mini Moka][mini-moka-git] and intentionally omits async support, synchronization,
+weighted eviction, and expiration. It provides a bounded cache using the
+[SIEVE][sieve-paper] eviction policy.
 
 ```rust
 use micro_moka::unsync::Cache;
@@ -19,17 +20,22 @@ assert_eq!(cache.get(&"key"), Some(&"value"));
 
 ## Why Micro Moka?
 
-**W-TinyLFU is a better eviction policy.** Standard LRU caches are vulnerable to scan pollution -- a single sequential scan can flush the entire cache. W-TinyLFU uses a frequency sketch (Count-Min Sketch with 4-bit counters) to admit only entries that are likely to be accessed again, producing significantly higher hit ratios on real-world workloads compared to LRU, FIFO, or CLOCK.
+**Efficient eviction.** SIEVE gives accessed entries a second chance using one
+visited bit per entry and a persistent hand. Cache hits do not reorder a recency
+list, keeping the read path small.
 
-**Minimal overhead.** One production dependency (`hashbrown`). No allocator, no async runtime, no parking lot, no unsafe code. Compiles fast, produces small binaries.
+**Minimal overhead.** The only production dependency is `hashbrown`. There is no
+async runtime, lock, atomic, custom allocator, or unsafe code in Micro Moka.
 
-**Single-threaded by design.** No `Arc`, no `Mutex`, no atomic operations. If your cache lives on one thread -- CLI tools, WASM, game loops, compilers, single-threaded servers -- you pay zero synchronization cost.
+**Single-threaded by design.** If a cache belongs to one thread, such as in CLI
+tools, WASM applications, game loops, compilers, or single-threaded servers, it
+does not need to pay synchronization costs.
 
 ## Installation
 
 ```toml
 [dependencies]
-micro-moka = "0.1"
+micro-moka = "1"
 ```
 
 ## Usage
@@ -37,44 +43,42 @@ micro-moka = "0.1"
 ```rust
 use micro_moka::unsync::Cache;
 
-// Create with capacity
-let mut cache: Cache<&str, i32> = Cache::new(1_000);
-
-// Or use the builder
 let mut cache: Cache<&str, i32> = Cache::builder()
     .max_capacity(1_000)
     .initial_capacity(100)
     .build();
 
-// Insert and retrieve
 cache.insert("key", 42);
 assert_eq!(cache.get(&"key"), Some(&42));
-
-// Check membership
 assert!(cache.contains_key(&"key"));
 
-// Remove entries
+// Inspect without affecting SIEVE eviction state.
+assert_eq!(cache.peek(&"key"), Some(&42));
+
+// Compute a missing value once.
+assert_eq!(cache.get_or_insert_with("other", || 7), &7);
+
 cache.invalidate(&"key");
-let removed = cache.remove(&"other_key"); // returns Option<V>
+let removed = cache.remove(&"other");
+assert_eq!(removed, Some(7));
 
-// Bulk invalidation
+cache.insert("low", 1);
+cache.insert("high", 100);
 cache.invalidate_entries_if(|_key, value| *value < 10);
-cache.invalidate_all();
 
-// Inspection
-let count = cache.entry_count();
-let policy = cache.policy();
-println!("max capacity: {:?}", policy.max_capacity());
-
-// Iteration (does not update access order)
 for (key, value) in cache.iter() {
-    println!("{}: {}", key, value);
+    println!("{key}: {value}");
 }
+
+cache.invalidate_all();
+assert_eq!(cache.entry_count(), 0);
 ```
 
 ### Custom Hashers
 
-The default hasher is `RandomState` (SipHash). For cache-heavy workloads, a faster hasher like [aHash][ahash] can improve throughput substantially:
+The default hasher is `RandomState`, the same HashDoS-resistant default used by
+`std::collections::HashMap`. A faster hasher can improve throughput when all keys
+are trusted:
 
 ```rust,ignore
 use micro_moka::unsync::Cache;
@@ -84,66 +88,61 @@ let mut cache: Cache<String, String, ahash::RandomState> = Cache::builder()
     .build_with_hasher(ahash::RandomState::default());
 ```
 
-## How W-TinyLFU Works
+## How SIEVE Works
 
-On every cache access, a probabilistic frequency counter (Count-Min Sketch) records how often keys are requested. When the cache is full and a new entry arrives:
+Entries remain in insertion order. Each entry has one visited bit, and the cache
+maintains a hand into the entry list:
 
-1. The **candidate** (new entry) is compared against **victims** (least-recently-used entries from the eviction queue)
-2. If the candidate's estimated frequency exceeds the victims', it is admitted and the victims are evicted
-3. If not, the candidate is rejected -- preventing low-frequency entries from displacing popular ones
+1. A successful `get` marks the entry as visited without moving it.
+2. When space is needed, the hand scans entries and clears visited bits.
+3. The first unvisited entry is evicted.
+4. The new entry is admitted unconditionally.
 
-The frequency sketch uses 4-bit counters with periodic aging (halved when a sample threshold is reached), keeping memory usage bounded regardless of the key universe size. The sketch is only enabled once the cache reaches 50% capacity, avoiding overhead during warmup.
+The hand persists between evictions, so the work of scanning visited entries is
+amortized while cache hits remain constant-time table lookups plus one bit write.
+`peek`, `contains_key`, and iteration do not set the visited bit.
 
 ## What Was Removed from Mini Moka
 
 | Feature | Rationale |
 |---------|-----------|
-| `sync` module (concurrent cache) | Eliminates `DashMap`, locks, atomics |
-| Async support | No runtime dependency |
-| Weight-based eviction (`Weigher`) | All entries cost 1 slot; simpler admission |
-| TTL / TTI expiration | No timer overhead; entries live until evicted or invalidated |
-| `smallvec`, `tagptr`, `triomphe` dependencies | Simplified internals |
+| Concurrent cache | Eliminates locks and atomics |
+| Async support | Avoids a runtime dependency |
+| Weight-based eviction | Every entry occupies one slot |
+| TTL and TTI expiration | Avoids timer and maintenance overhead |
+| W-TinyLFU admission | SIEVE uses a one-bit second-chance policy |
 
 ## Minimum Supported Rust Version
 
-| Feature | MSRV |
-|---------|------|
-| Default | Rust 1.76.0 (Feb 8, 2024) |
-
-MSRV follows a rolling 6-month policy. Bumping MSRV is not considered a semver-breaking change.
+Micro Moka supports Rust 1.76.0 and uses the Rust 2021 edition. MSRV increases
+are not considered semver-breaking changes.
 
 ## Development
 
 ```bash
-# All tests (including compile-fail and doc tests)
-RUSTFLAGS='--cfg trybuild' cargo test --all-features
-
-# Clippy (CI treats warnings as errors)
-cargo clippy --lib --tests --all-features --all-targets -- -D warnings
-
-# Format
+cargo test --all-features
+cargo clippy --lib --tests --all-features -- -D warnings
 cargo fmt --all -- --check
-
-# Docs (nightly)
 cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' doc --no-deps
+cargo +nightly miri test --lib --all-features
 
-# Miri
-cargo +nightly miri test
+# Benchmark dependencies are opt-in.
+RUSTFLAGS='--cfg bench_deps' cargo bench --bench benchmark
 ```
 
 ## Releases
 
-Automated on merge to `main`. See [RELEASING.md](./RELEASING.md) for details.
+Merges to `main` are released automatically. See [RELEASING.md](./RELEASING.md).
 
 ## Credits
 
-Architecture inspired by [Caffeine][caffeine-git] for Java. Thanks to Ben Manes and all Caffeine contributors.
-
-Forked from [Mini Moka][mini-moka-git] by Tatsuya Kawano and the Moka contributors.
+SIEVE was introduced by Yang et al. at NSDI 2024. Micro Moka was forked from
+[Mini Moka][mini-moka-git] by Tatsuya Kawano and the Moka contributors.
 
 ## License
 
-MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) and
+[LICENSE-APACHE](LICENSE-APACHE).
 
 [gh-actions-badge]: https://github.com/user1303836/micro-moka/actions/workflows/CI.yml/badge.svg
 [release-badge]: https://img.shields.io/crates/v/micro-moka.svg
@@ -153,6 +152,4 @@ MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-A
 [crate]: https://crates.io/crates/micro-moka
 [docs]: https://docs.rs/micro-moka
 [mini-moka-git]: https://github.com/moka-rs/mini-moka
-[caffeine-git]: https://github.com/ben-manes/caffeine
-[tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
-[ahash]: https://crates.io/crates/ahash
+[sieve-paper]: https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo

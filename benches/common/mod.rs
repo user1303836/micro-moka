@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
-use rand::distributions::Distribution;
+use rand::distr::Distribution;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_distr::Zipf;
 
 pub const SEED: u64 = 42;
@@ -12,7 +12,7 @@ pub const OPS_PER_ITER: usize = 10_000;
 
 pub fn generate_zipf_workload(n: usize, s: f64, num_keys: usize, seed: u64) -> Vec<u64> {
     let mut rng = StdRng::seed_from_u64(seed);
-    let zipf = Zipf::new(num_keys as u64, s).unwrap();
+    let zipf = Zipf::new(num_keys as f64, s).unwrap();
     (0..n)
         .map(|_| {
             let v: f64 = zipf.sample(&mut rng);
@@ -23,10 +23,14 @@ pub fn generate_zipf_workload(n: usize, s: f64, num_keys: usize, seed: u64) -> V
 
 pub fn generate_uniform_workload(n: usize, num_keys: usize, seed: u64) -> Vec<u64> {
     let mut rng = StdRng::seed_from_u64(seed);
-    (0..n).map(|_| rng.gen_range(0..num_keys as u64)).collect()
+    (0..n)
+        .map(|_| rng.random_range(0..num_keys as u64))
+        .collect()
 }
 
 pub fn generate_mixed_ops(n: usize, read_pct: u8, seed: u64) -> Vec<bool> {
     let mut rng = StdRng::seed_from_u64(seed.wrapping_add(1));
-    (0..n).map(|_| rng.gen_range(0..100u8) < read_pct).collect()
+    (0..n)
+        .map(|_| rng.random_range(0..100u8) < read_pct)
+        .collect()
 }

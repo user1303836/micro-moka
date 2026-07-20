@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -36,8 +36,10 @@ jobs:
       - name: Read crate metadata (head)
         id: head
         run: |
-          echo "crate_name=$(.github/scripts/cargo-package-field.sh Cargo.toml name)" >> "$GITHUB_OUTPUT"
-          echo "version=$(.github/scripts/cargo-package-field.sh Cargo.toml version)" >> "$GITHUB_OUTPUT"
+          {
+            echo "crate_name=$(.github/scripts/cargo-package-field.sh Cargo.toml name)"
+            echo "version=$(.github/scripts/cargo-package-field.sh Cargo.toml version)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Read base version
         id: base
