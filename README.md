@@ -183,8 +183,8 @@ cargo fmt --all -- --check
 cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' doc --no-deps
 cargo +nightly miri test --lib --all-features
 
-# Benchmark dependencies are opt-in.
-RUSTFLAGS='--cfg bench_deps' cargo bench --bench benchmark
+# Benchmarks require Rust 1.85 and have a separate, locked dependency graph.
+cargo run --release --locked --manifest-path benches/Cargo.toml
 ```
 
 ## Releases

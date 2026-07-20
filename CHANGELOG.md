@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `CacheBuilder::admission_scan_limit` and `Policy::admission_scan_limit`; the default budget is 16 inspected entries and a zero budget freezes new-key admission while full.
 - Added benchmark coverage for negative lookups, updates, delete/reinsert churn, request and synthetic byte hit ratios, scan filtering, admission outcome rates, and matched successful-admission percentiles.
 - Added direct, exactly pinned benchmark comparisons with `sieve-cache` 1.1.6 and `senba` 0.2.0.
+- Added a standalone, non-published benchmark package with a lockfile covering transitive dependencies, plus standard all-target CI validation for the library.
 - Added `docs/cache-positioning.md` with ecosystem research, methodology, representative results, limitations, and the rationale for Micro Moka's safe, predictable admission positioning.
 
 ### Changed
@@ -25,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Corrected SIEVE traversal to start at the oldest resident and move toward newer residents, preserving FIFO eviction when every resident is unvisited.
 - Separated accepted and rejected `try_insert` latency distributions and added retry-through-success evidence so rejected admission attempts are not compared with successful competitor insertions.
+- Isolated the Rust 1.85 benchmark toolchain from the Rust 1.76 library graph, so `cargo test --all-targets --all-features` is a standard passing workflow.
+- Clarified the documented zero-capacity exception for `get_or_insert_with`.
 
 ## [1.1.0] - 2026-07-20
 

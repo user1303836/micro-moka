@@ -13,7 +13,8 @@ use std::{
 ///
 /// `Cache` uses [`hashbrown::HashTable`][hb-hashtable] for key lookup and a
 /// contiguous slab for key-value storage. A configured maximum capacity bounds
-/// the number of resident entries.
+/// the number of resident entries, except that [`get_or_insert_with`](Self::get_or_insert_with)
+/// retains one entry in a zero-capacity cache so it can return a valid reference.
 ///
 /// [hb-hashtable]: https://docs.rs/hashbrown/latest/hashbrown/struct.HashTable.html
 ///

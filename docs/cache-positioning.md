@@ -89,10 +89,13 @@ budget of 64 admits enough of that scan to collapse the benefit.
 Run the complete suite with:
 
 ```bash
-RUSTFLAGS='--cfg bench_deps' cargo bench --bench benchmark
+cargo run --release --locked --manifest-path benches/Cargo.toml
 ```
 
-All evidence-bearing direct dependencies are pinned exactly in `Cargo.toml`:
+The committed `benches/Cargo.lock` fixes direct and transitive versions without
+placing benchmark-only, Rust 1.85 dependencies in the library's Rust 1.76
+dependency graph. All evidence-bearing direct dependencies are also pinned
+exactly in `benches/Cargo.toml`:
 `quick_cache` 0.7.0, `lru` 0.18.1, `hashlink` 0.12.1, `mini-moka` 0.10.3,
 `sieve-cache` 1.1.6, `senba` 0.2.0, `rand` 0.10.2, `rand_distr` 0.6.0, and
 `ahash` 0.8.12. The harness uses deterministic seed 42.
@@ -130,16 +133,16 @@ scalar fallback.
 
 | Operation | micro-moka | quick-cache | lru | hashlink | mini-moka | sieve-cache | senba | HashMap |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Zipf get | 193.0 | 624.9 | 438.8 | 455.3 | 34.0 | 232.8 | 43.2 | 236.2 |
-| Negative lookup | 216.1 | 743.7 | 829.5 | 826.1 | 48.6 | 247.5 | 32.4 | 249.2 |
-| Zipf insert/update | 71.1 | 167.6 | 162.7 | 155.6 | 20.4 | 64.8 | 39.6 | 195.0 |
-| Resident update | 81.0 | 325.5 | 335.5 | 318.0 | 21.0 | 192.9 | 38.4 | 205.1 |
-| Mixed 95% read | 190.3 | 554.8 | 349.1 | 367.1 | 34.6 | 193.1 | 44.4 | 206.1 |
-| Mixed 50% read | 127.2 | 294.5 | 248.5 | 254.7 | 26.4 | 90.1 | 43.9 | 208.7 |
-| Delete + reinsert | 65.6 | 97.6 | 88.1 | 227.6 | 23.8 | 58.5 | 23.2 | 216.2 |
+| Zipf get | 200.5 | 640.1 | 449.8 | 452.2 | 34.4 | 231.2 | 45.3 | 240.5 |
+| Negative lookup | 212.8 | 665.4 | 672.7 | 699.0 | 47.2 | 268.5 | 32.7 | 243.3 |
+| Zipf insert/update | 71.2 | 176.2 | 164.1 | 160.3 | 22.2 | 65.4 | 40.5 | 205.5 |
+| Resident update | 82.6 | 330.5 | 329.3 | 316.9 | 25.0 | 194.4 | 39.0 | 209.8 |
+| Mixed 95% read | 191.8 | 560.9 | 362.3 | 370.5 | 34.3 | 195.1 | 46.1 | 212.2 |
+| Mixed 50% read | 125.9 | 300.8 | 244.0 | 253.2 | 26.5 | 91.1 | 46.4 | 209.8 |
+| Delete + reinsert | 67.1 | 100.9 | 72.2 | 208.0 | 23.9 | 59.2 | 23.8 | 223.9 |
 
-Micro Moka with opt-in aHash measured 618.8 million gets/s on the same Zipf
-workload, 3.2 times its secure-default result. Cross-cache throughput claims
+Micro Moka with opt-in aHash measured 611.5 million gets/s on the same Zipf
+workload, 3.0 times its secure-default result. Cross-cache throughput claims
 that do not account for hashers are not credible.
 
 ### Request and byte hit ratio
@@ -148,7 +151,7 @@ that do not account for hashers are not credible.
 |---|---:|---:|---:|---:|---:|---:|
 | Zipf 0.7 | 43.8% | 43.8% | 32.9% | 42.5% | 34.1% | 43.3% |
 | Zipf 0.9 | 64.5% | 64.6% | 55.6% | 63.9% | 56.8% | 64.1% |
-| Zipf 1.0 | 74.5% | 74.5% | 67.5% | 74.1% | 68.5% | 74.2% |
+| Zipf 1.0 | 74.5% | 74.5% | 67.5% | 74.0% | 68.5% | 74.2% |
 | Zipf 1.2 | 89.3% | 89.4% | 86.1% | 89.3% | 86.6% | 89.2% |
 | Uniform | 10.0% | 10.0% | 10.0% | 10.0% | 10.0% | 10.0% |
 
@@ -181,8 +184,8 @@ One budgeted call, with 1% all-visited resident sets:
 
 | Outcome | Count | Rate | p50 | p99 | p99.9 | max |
 |---|---:|---:|---:|---:|---:|---:|
-| Accepted | 1,980 | 99.0% | 42 | 84 | 209 | 1,125 |
-| Rejected | 20 | 1.0% | 83 | 84 | 84 | 84 |
+| Accepted | 1,980 | 99.0% | 42 | 84 | 125 | 167 |
+| Rejected | 20 | 1.0% | 41 | 84 | 84 | 125 |
 
 This table does not compare rejected work with successful competitor inserts.
 The matched-outcome table below times eventual success after every resident has
@@ -190,12 +193,12 @@ been visited:
 
 | Cache/path | p50 | p99 | p99.9 | max |
 |---|---:|---:|---:|---:|
-| Micro Moka exact | 10,833 | 20,375 | 21,125 | 23,958 |
-| Micro Moka budget 16, retry through success | 10,959 | 18,250 | 19,500 | 19,833 |
-| quick-cache | 23,875 | 26,750 | 28,334 | 28,834 |
-| sieve-cache 1.1.6 | 5,042 | 5,791 | 6,292 | 6,625 |
-| senba Slot16 | 41 | 83 | 84 | 208 |
-| lru | 41 | 42 | 83 | 84 |
+| Micro Moka exact | 12,959 | 18,333 | 18,791 | 19,750 |
+| Micro Moka budget 16, retry through success | 12,375 | 21,959 | 22,708 | 22,959 |
+| quick-cache | 23,709 | 25,458 | 26,208 | 26,375 |
+| sieve-cache 1.1.6 | 5,042 | 9,625 | 10,375 | 11,083 |
+| senba Slot16 | 42 | 208 | 584 | 45,875 |
+| lru | 41 | 83 | 83 | 83 |
 
 Budget 16 took exactly 626 attempts in every matched sample. Its value is the
 hard per-call inspection limit and explicit rejection, not lower total latency

@@ -1,0 +1,27 @@
+[package]
+name = "micro-moka-benchmarks"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+autobins = false
+
+[[bin]]
+name = "benchmark"
+path = "benchmark.rs"
+
+[dependencies]
+micro-moka = { path = ".." }
+quick_cache = "=0.7.0"
+lru = "=0.18.1"
+hashlink = "=0.12.1"
+mini-moka = "=0.10.3"
+sieve-cache = "=1.1.6"
+senba = "=0.2.0"
+rand = "=0.10.2"
+rand_distr = "=0.6.0"
+ahash = "=0.8.12"
+
+[profile.release]
+lto = true
+codegen-units = 1
