@@ -11,9 +11,10 @@ const MEASURE_ITERS: usize = 2_000;
 const CAP: usize = 1_000;
 const KEY_SPACE: usize = CAP * KEY_SPACE_MULTIPLIER;
 const HIT_RATIO_OPS: usize = 1_000_000;
-const TAIL_SAMPLES: usize = 2_000;
-const TAIL_CAP: usize = 10_000;
-const HOT_TAIL_SAMPLES: usize = 200;
+const ADMISSION_OUTCOME_SAMPLES: usize = 2_000;
+const ADMISSION_CAP: usize = 10_000;
+const ALL_HOT_SETUPS: usize = 200;
+const ADMISSION_SCAN_LIMIT: u32 = 16;
 
 fn main() {
     let zipf_workload = generate_zipf_workload(OPS_PER_ITER, 1.0, KEY_SPACE, SEED);
@@ -73,7 +74,7 @@ fn main() {
     );
 
     print_admission_quality();
-    print_hot_eviction_latency();
+    print_admission_work();
 }
 
 // ---------------------------------------------------------------------------
@@ -1107,248 +1108,155 @@ fn weighted_hit_ratio(workload: &[u64], scan_limit: Option<u32>) -> (f64, f64) {
     )
 }
 
-fn print_hot_eviction_latency() {
-    let attempts = admission_attempt_latency_micro();
+fn print_admission_work() {
+    let outcomes = admission_attempt_outcomes_micro();
+
+    assert_eq!(outcomes.accepted, ADMISSION_OUTCOME_SAMPLES * 99 / 100);
+    assert_eq!(outcomes.rejected, ADMISSION_OUTCOME_SAMPLES / 100);
 
     println!();
-    println!("=== Full-cache budgeted admission-attempt latency (ns) | cap={TAIL_CAP} ===");
+    println!(
+        "=== Full-cache budgeted admission outcomes | cap={ADMISSION_CAP} | scan limit={ADMISSION_SCAN_LIMIT} ==="
+    );
     println!();
     println!(
-        "1% of attempts see an all-visited resident set; other attempts see an unvisited set."
+        "Every 100th independent cache setup has all residents visited; the others have an unvisited oldest resident."
     );
-    println!("| Outcome | Count | Rate | p50 | p99 | p99.9 | max |");
-    println!("|---|---:|---:|---:|---:|---:|---:|");
-    print_outcome_latency_row("accepted", &attempts.accepted, TAIL_SAMPLES);
-    print_outcome_latency_row("rejected", &attempts.rejected, TAIL_SAMPLES);
+    println!("| Outcome/path | Count | Rate | Candidate state | Resident inspections |");
+    println!("|---|---:|---:|---|---:|");
+    println!(
+        "| Accepted attempt (successful admission) | {} | {:.1}% | inserted | exactly 1 |",
+        outcomes.accepted,
+        outcomes.accepted as f64 / ADMISSION_OUTCOME_SAMPLES as f64 * 100.0
+    );
+    println!(
+        "| Rejected attempt | {} | {:.1}% | returned; not inserted | exactly {ADMISSION_SCAN_LIMIT} |",
+        outcomes.rejected,
+        outcomes.rejected as f64 / ADMISSION_OUTCOME_SAMPLES as f64 * 100.0
+    );
 
-    let exact = hot_success_latency_micro_exact();
-    let (eventual, attempt_counts) = hot_success_latency_micro_budgeted();
-    let quick = hot_success_latency_quick_cache();
-    let sieve = hot_success_latency_sieve_cache();
-    let senba = hot_success_latency_senba();
-    let lru = hot_success_latency_lru();
+    let exact_successes = all_hot_success_micro_exact();
+    let attempt_counts = all_hot_success_micro_budgeted();
+    let rejected_attempts = attempt_counts
+        .iter()
+        .map(|attempts| attempts - 1)
+        .sum::<u64>();
+    let successful_admissions = attempt_counts.len() as u64;
+    let total_attempts = rejected_attempts + successful_admissions;
+    let expected_attempts = ADMISSION_CAP as u64 / ADMISSION_SCAN_LIMIT as u64 + 1;
+
+    assert_eq!(ADMISSION_CAP as u32 % ADMISSION_SCAN_LIMIT, 0);
+    assert_eq!(exact_successes, ALL_HOT_SETUPS);
+    assert!(attempt_counts
+        .iter()
+        .all(|&attempts| attempts == expected_attempts));
 
     println!();
-    println!("=== Eventual successful full-cache admission latency (ns) | cap={TAIL_CAP} | all residents visited ===");
+    println!(
+        "=== Successful full-cache admission work | cap={ADMISSION_CAP} | all residents visited ==="
+    );
     println!();
-    println!("| Cache/path | p50 | p99 | p99.9 | max |");
-    println!("|---|---:|---:|---:|---:|");
-    print_latency_row("micro exact", &exact);
-    print_latency_row("micro budget 16, retry to success", &eventual);
-    print_latency_row("quick-cache", &quick);
-    print_latency_row("sieve-cache", &sieve);
-    print_latency_row("senba Slot16", &senba);
-    print_latency_row("lru", &lru);
+    println!("| Micro Moka path | Independent cache setups | Calls per successful admission | Rejected attempts | Successful admissions | Resident inspections through success |");
+    println!("|---|---:|---:|---:|---:|---:|");
     println!(
-        "micro budget 16 attempts to success: min={}, mean={:.1}, max={}",
-        attempt_counts[0],
-        attempt_counts.iter().sum::<u64>() as f64 / attempt_counts.len() as f64,
-        attempt_counts[attempt_counts.len() - 1]
+        "| Exact `insert` | {exact_successes} | exactly 1 | 0 | {exact_successes} | exactly {} in one call |",
+        ADMISSION_CAP + 1
+    );
+    println!(
+        "| Budget-{ADMISSION_SCAN_LIMIT} `try_insert`, retry through success | {} | exactly {expected_attempts} ({} rejected + 1 accepted) | {rejected_attempts} | {successful_admissions} | exactly {} total; at most {ADMISSION_SCAN_LIMIT} per call |",
+        attempt_counts.len(),
+        expected_attempts - 1,
+        ADMISSION_CAP + 1
+    );
+    println!(
+        "Budget-{ADMISSION_SCAN_LIMIT} retry-chain attempt outcomes: rejected={rejected_attempts} ({:.3}%), accepted={successful_admissions} ({:.3}%).",
+        rejected_attempts as f64 / total_attempts as f64 * 100.0,
+        successful_admissions as f64 / total_attempts as f64 * 100.0
     );
 }
 
-struct AdmissionAttemptSamples {
-    accepted: Vec<u128>,
-    rejected: Vec<u128>,
+struct AdmissionAttemptOutcomes {
+    accepted: usize,
+    rejected: usize,
 }
 
-fn print_outcome_latency_row(name: &str, samples: &[u128], total: usize) {
-    println!(
-        "| {name} | {} | {:.1}% | {} | {} | {} | {} |",
-        samples.len(),
-        samples.len() as f64 / total as f64 * 100.0,
-        percentile(samples, 500),
-        percentile(samples, 990),
-        percentile(samples, 999),
-        samples[samples.len() - 1]
-    );
-}
-
-fn print_latency_row(name: &str, samples: &[u128]) {
-    println!(
-        "| {name} | {} | {} | {} | {} |",
-        percentile(samples, 500),
-        percentile(samples, 990),
-        percentile(samples, 999),
-        samples[samples.len() - 1]
-    );
-}
-
-fn percentile(samples: &[u128], per_thousand: usize) -> u128 {
-    let index = (samples.len() - 1) * per_thousand / 1_000;
-    samples[index]
-}
-
-fn admission_attempt_latency_micro() -> AdmissionAttemptSamples {
-    let mut accepted = Vec::with_capacity(TAIL_SAMPLES);
-    let mut rejected = Vec::with_capacity(TAIL_SAMPLES / 100);
-    for sample in 0..TAIL_SAMPLES {
+fn admission_attempt_outcomes_micro() -> AdmissionAttemptOutcomes {
+    let mut accepted = 0;
+    let mut rejected = 0;
+    for sample in 0..ADMISSION_OUTCOME_SAMPLES {
         let mut cache = micro_moka::unsync::Cache::builder()
-            .max_capacity(TAIL_CAP as u64)
-            .initial_capacity(TAIL_CAP)
-            .admission_scan_limit(16)
+            .max_capacity(ADMISSION_CAP as u64)
+            .initial_capacity(ADMISSION_CAP)
+            .admission_scan_limit(ADMISSION_SCAN_LIMIT)
             .build_with_hasher(ahash::RandomState::new());
-        for key in 0..TAIL_CAP as u64 {
+        for key in 0..ADMISSION_CAP as u64 {
             cache.insert(key, key);
         }
         if sample % 100 == 0 {
-            for key in 0..TAIL_CAP as u64 {
+            for key in 0..ADMISSION_CAP as u64 {
                 black_box(cache.get(&key));
             }
         }
-        let candidate = TAIL_CAP as u64 + sample as u64;
-        let start = Instant::now();
+        let candidate = ADMISSION_CAP as u64 + sample as u64;
         let result = black_box(cache.try_insert(candidate, candidate));
-        let elapsed = start.elapsed().as_nanos();
         if result.is_ok() {
-            accepted.push(elapsed);
+            accepted += 1;
+            assert!(cache.contains_key(&candidate));
         } else {
-            rejected.push(elapsed);
+            rejected += 1;
+            assert_eq!(result, Err((candidate, candidate)));
+            assert!(!cache.contains_key(&candidate));
         }
+        assert_eq!(cache.entry_count(), ADMISSION_CAP as u64);
     }
-    accepted.sort_unstable();
-    rejected.sort_unstable();
-    AdmissionAttemptSamples { accepted, rejected }
+    AdmissionAttemptOutcomes { accepted, rejected }
 }
 
-fn hot_success_latency_micro_exact() -> Vec<u128> {
-    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
-    for sample in 0..HOT_TAIL_SAMPLES {
+fn all_hot_success_micro_exact() -> usize {
+    let mut successes = 0;
+    for sample in 0..ALL_HOT_SETUPS {
         let mut cache = micro_moka::unsync::Cache::builder()
-            .max_capacity(TAIL_CAP as u64)
-            .initial_capacity(TAIL_CAP)
+            .max_capacity(ADMISSION_CAP as u64)
+            .initial_capacity(ADMISSION_CAP)
             .build_with_hasher(ahash::RandomState::new());
-        for key in 0..TAIL_CAP as u64 {
+        for key in 0..ADMISSION_CAP as u64 {
             cache.insert(key, key);
         }
-        for key in 0..TAIL_CAP as u64 {
+        for key in 0..ADMISSION_CAP as u64 {
             black_box(cache.get(&key));
         }
-        let candidate = TAIL_CAP as u64 + sample as u64;
-        let start = Instant::now();
+        let candidate = ADMISSION_CAP as u64 + sample as u64;
         cache.insert(candidate, candidate);
-        samples.push(start.elapsed().as_nanos());
         assert!(cache.contains_key(&candidate));
+        successes += 1;
     }
-    samples.sort_unstable();
-    samples
+    successes
 }
 
-fn hot_success_latency_micro_budgeted() -> (Vec<u128>, Vec<u64>) {
-    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
-    let mut attempt_counts = Vec::with_capacity(HOT_TAIL_SAMPLES);
-    for sample in 0..HOT_TAIL_SAMPLES {
+fn all_hot_success_micro_budgeted() -> Vec<u64> {
+    let mut attempt_counts = Vec::with_capacity(ALL_HOT_SETUPS);
+    for sample in 0..ALL_HOT_SETUPS {
         let mut cache = micro_moka::unsync::Cache::builder()
-            .max_capacity(TAIL_CAP as u64)
-            .initial_capacity(TAIL_CAP)
-            .admission_scan_limit(16)
+            .max_capacity(ADMISSION_CAP as u64)
+            .initial_capacity(ADMISSION_CAP)
+            .admission_scan_limit(ADMISSION_SCAN_LIMIT)
             .build_with_hasher(ahash::RandomState::new());
-        for key in 0..TAIL_CAP as u64 {
+        for key in 0..ADMISSION_CAP as u64 {
             cache.insert(key, key);
         }
-        for key in 0..TAIL_CAP as u64 {
+        for key in 0..ADMISSION_CAP as u64 {
             black_box(cache.get(&key));
         }
-        let candidate = TAIL_CAP as u64 + sample as u64;
+        let candidate = ADMISSION_CAP as u64 + sample as u64;
         let mut attempts = 0u64;
-        let start = Instant::now();
         loop {
             attempts += 1;
             if cache.try_insert(candidate, candidate).is_ok() {
                 break;
             }
         }
-        samples.push(start.elapsed().as_nanos());
         attempt_counts.push(attempts);
         assert!(cache.contains_key(&candidate));
     }
-    samples.sort_unstable();
-    attempt_counts.sort_unstable();
-    (samples, attempt_counts)
-}
-
-fn hot_success_latency_quick_cache() -> Vec<u128> {
-    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
-    for sample in 0..HOT_TAIL_SAMPLES {
-        let mut cache = quick_cache::unsync::Cache::new(TAIL_CAP);
-        cache.reserve(TAIL_CAP);
-        for key in 0..TAIL_CAP as u64 {
-            cache.insert(key, key);
-        }
-        for key in 0..TAIL_CAP as u64 {
-            black_box(cache.get(&key));
-        }
-        let candidate = TAIL_CAP as u64 + sample as u64;
-        let start = Instant::now();
-        cache.insert(candidate, candidate);
-        samples.push(start.elapsed().as_nanos());
-        assert!(cache.get(&candidate).is_some());
-    }
-    samples.sort_unstable();
-    samples
-}
-
-fn hot_success_latency_sieve_cache() -> Vec<u128> {
-    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
-    for sample in 0..HOT_TAIL_SAMPLES {
-        let mut cache = sieve_cache::SieveCache::new(TAIL_CAP).unwrap();
-        for key in 0..TAIL_CAP as u64 {
-            cache.insert(key, key);
-        }
-        for key in 0..TAIL_CAP as u64 {
-            black_box(cache.get(&key));
-        }
-        let candidate = TAIL_CAP as u64 + sample as u64;
-        let start = Instant::now();
-        black_box(cache.insert(candidate, candidate));
-        samples.push(start.elapsed().as_nanos());
-        assert!(cache.contains_key(&candidate));
-    }
-    samples.sort_unstable();
-    samples
-}
-
-fn hot_success_latency_senba() -> Vec<u128> {
-    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
-    for _ in 0..HOT_TAIL_SAMPLES {
-        let mut cache: senba::Cache<u64, u64, senba::Slot16> = senba::Cache::new(TAIL_CAP);
-        let mut candidate = 0u64;
-        while cache.len() < TAIL_CAP {
-            black_box(cache.insert(candidate, candidate));
-            candidate += 1;
-        }
-        let resident_keys = cache.iter().map(|(&key, _)| key).collect::<Vec<_>>();
-        for key in resident_keys {
-            black_box(cache.get(&key));
-        }
-        while cache.contains_key(&candidate) {
-            candidate += 1;
-        }
-        let start = Instant::now();
-        black_box(cache.insert(candidate, candidate));
-        samples.push(start.elapsed().as_nanos());
-        assert!(cache.contains_key(&candidate));
-    }
-    samples.sort_unstable();
-    samples
-}
-
-fn hot_success_latency_lru() -> Vec<u128> {
-    let mut samples = Vec::with_capacity(HOT_TAIL_SAMPLES);
-    for sample in 0..HOT_TAIL_SAMPLES {
-        let mut cache = lru::LruCache::new(NonZeroUsize::new(TAIL_CAP).unwrap());
-        for key in 0..TAIL_CAP as u64 {
-            cache.put(key, key);
-        }
-        for key in 0..TAIL_CAP as u64 {
-            black_box(cache.get(&key));
-        }
-        let candidate = TAIL_CAP as u64 + sample as u64;
-        let start = Instant::now();
-        cache.put(candidate, candidate);
-        samples.push(start.elapsed().as_nanos());
-        assert!(cache.contains(&candidate));
-    }
-    samples.sort_unstable();
-    samples
+    attempt_counts
 }

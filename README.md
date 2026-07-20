@@ -48,7 +48,7 @@ Rust 1.76 support, and explicitly bounded admission work.
 The benchmark suite measures hits, negative lookups, inserts, updates,
 delete-and-reinsert churn, mixed workloads, request and byte hit ratios,
 scan filtering, admission-attempt outcomes, and matched successful-admission
-percentiles. See
+retry accounting. See
 [benchmark report](./docs/cache-positioning.md) for methodology, results, and limitations.
 
 ## Installation
@@ -145,7 +145,7 @@ maintains a hand into the list:
 
 The exact sweep is amortized constant work, but a single insertion can inspect
 the whole cache when every resident was visited. `try_insert` exists for callers
-that care about that individual-operation tail.
+that need a hard bound on one operation's policy scan work.
 
 `peek`, `contains_key`, and iteration do not set the visited bit.
 
@@ -166,7 +166,7 @@ Micro Moka does not try to replace every Rust cache:
 
 Micro Moka intentionally omits weighted capacity and expiration. Those features
 need more per-entry state, clock reads, cleanup machinery, or policy coupling and
-would weaken this crate's latency-density position. Values may still be
+would weaken this crate's predictability-density position. Values may still be
 `Option<T>` for negative caching, and callers can invalidate entries explicitly.
 
 ## Minimum Supported Rust Version

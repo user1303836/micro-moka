@@ -42,8 +42,8 @@ miss-heavy workload can be a cache's dominant path.
 The direct comparisons change the claim. Micro Moka is not the raw density
 leader: Senba's `Slot16` stores a `u64`/`u64` pair in a 16-byte arena stride,
 whereas Micro Moka's packed slab slot is 32 bytes before its hash-table index.
-Nor is it the unconditional-admission tail-latency leader: Senba bounds each
-shard at 64 entries and LRU has constant policy work.
+Nor is it the only design with bounded admission work: Senba bounds each shard
+at 64 entries and LRU has constant policy work.
 
 The ecosystem is less well served at a different intersection: safe Rust,
 Rust 1.76 support, arbitrary-size key/value storage, HashDoS-resistant defaults,
@@ -75,8 +75,10 @@ Budgeted admission is not a faster successful insertion. It is a scheduling and
 backpressure primitive: each call has bounded policy work, while the caller
 chooses whether to retry, bypass the cache, or drop/count the candidate. On a
 fully visited 10,000-entry cache, budget 16 requires 626 calls to achieve the
-same successful admission that exact SIEVE performs in one call. Total measured
-policy time is similar; the work is split into predictable pieces.
+same successful admission that exact SIEVE performs in one call. Both paths
+inspect 10,001 residents in total in this constructed case; the budgeted path
+splits that work into calls of at most 16 inspections and exposes every
+deferred attempt to the caller.
 
 The default of 16 is a workload-informed compromise, not a universal optimum.
 Across the deterministic Zipf and uniform workloads below it stays within 0.03
@@ -106,12 +108,14 @@ exactly in `benches/Cargo.toml`:
 - Scan filtering: a warmed 1,000-entry hot set alternates with 32 unique keys.
 - Byte hit ratio: deterministic synthetic object sizes from 1 to 1,024 bytes;
   object size is measured but does not influence entry-bounded eviction.
-- Admission-attempt latency: 2,000 independently built, full 10,000-entry
-  caches. Exactly 1% have every resident visited. Accepted and rejected
-  outcomes are reported separately with counts and rates.
-- Matched successful admission: 200 independently built full caches with every
-  resident visited. Every row ends with the candidate resident. The budgeted
-  row includes all retries through success.
+- Admission outcomes: 2,000 independently built, full 10,000-entry caches.
+  Exactly 1% have every resident visited. Accepted admissions and rejected
+  attempts are reported separately with counts, rates, candidate disposition,
+  and deterministic policy-scan work.
+- Successful-admission work: 200 independently built full caches per Micro Moka
+  path, with every resident visited. Every setup ends with the candidate
+  resident. The budgeted path includes and counts every rejected retry through
+  the final successful admission.
 - Density: a production unit test fixes Micro Moka's `u64`/`u64` slab-slot
   layout at 32 bytes on supported CI targets. Senba's 16-byte stride is a public
   type-level contract.
@@ -123,25 +127,24 @@ comparisons within Micro Moka use the same aHash state.
 
 ## Representative Results
 
-Measured on an Apple M4 with 16 GiB RAM, macOS 15.7.3, Rust 1.94.0. Times are
-nanoseconds and throughput is millions of API operations per second. These are
-single-run local results; rerun on the deployment target. Senba's README states
-that its SIMD lookup is x86_64 AVX2-only, so this Apple Silicon run uses its
-scalar fallback.
+Measured on an Apple M4 with 16 GiB RAM, macOS 15.7.3, Rust 1.94.0. Throughput
+is millions of API operations per second. These are single-run local results;
+rerun on the deployment target. Senba's README states that its SIMD lookup is
+x86_64 AVX2-only, so this Apple Silicon run uses its scalar fallback.
 
 ### Native-default throughput
 
 | Operation | micro-moka | quick-cache | lru | hashlink | mini-moka | sieve-cache | senba | HashMap |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Zipf get | 200.5 | 640.1 | 449.8 | 452.2 | 34.4 | 231.2 | 45.3 | 240.5 |
-| Negative lookup | 212.8 | 665.4 | 672.7 | 699.0 | 47.2 | 268.5 | 32.7 | 243.3 |
-| Zipf insert/update | 71.2 | 176.2 | 164.1 | 160.3 | 22.2 | 65.4 | 40.5 | 205.5 |
-| Resident update | 82.6 | 330.5 | 329.3 | 316.9 | 25.0 | 194.4 | 39.0 | 209.8 |
-| Mixed 95% read | 191.8 | 560.9 | 362.3 | 370.5 | 34.3 | 195.1 | 46.1 | 212.2 |
-| Mixed 50% read | 125.9 | 300.8 | 244.0 | 253.2 | 26.5 | 91.1 | 46.4 | 209.8 |
-| Delete + reinsert | 67.1 | 100.9 | 72.2 | 208.0 | 23.9 | 59.2 | 23.8 | 223.9 |
+| Zipf get | 202.4 | 638.4 | 455.9 | 464.4 | 34.7 | 243.4 | 35.9 | 232.6 |
+| Negative lookup | 224.1 | 716.1 | 706.6 | 764.6 | 44.8 | 274.2 | 34.2 | 256.9 |
+| Zipf insert/update | 70.4 | 167.4 | 161.8 | 162.3 | 22.3 | 62.0 | 43.2 | 195.6 |
+| Resident update | 118.8 | 302.5 | 332.2 | 301.8 | 23.5 | 196.5 | 41.3 | 213.9 |
+| Mixed 95% read | 195.7 | 566.4 | 364.4 | 376.1 | 34.1 | 202.2 | 46.9 | 214.3 |
+| Mixed 50% read | 127.9 | 295.1 | 250.2 | 253.7 | 26.3 | 94.3 | 46.4 | 215.1 |
+| Delete + reinsert | 67.5 | 97.6 | 84.8 | 205.2 | 24.2 | 59.5 | 24.1 | 221.6 |
 
-Micro Moka with opt-in aHash measured 611.5 million gets/s on the same Zipf
+Micro Moka with opt-in aHash measured 611.9 million gets/s on the same Zipf
 workload, 3.0 times its secure-default result. Cross-cache throughput claims
 that do not account for hashers are not credible.
 
@@ -151,7 +154,7 @@ that do not account for hashers are not credible.
 |---|---:|---:|---:|---:|---:|---:|
 | Zipf 0.7 | 43.8% | 43.8% | 32.9% | 42.5% | 34.1% | 43.3% |
 | Zipf 0.9 | 64.5% | 64.6% | 55.6% | 63.9% | 56.8% | 64.1% |
-| Zipf 1.0 | 74.5% | 74.5% | 67.5% | 74.0% | 68.5% | 74.2% |
+| Zipf 1.0 | 74.5% | 74.5% | 67.5% | 74.1% | 68.5% | 74.2% |
 | Zipf 1.2 | 89.3% | 89.4% | 86.1% | 89.3% | 86.6% | 89.2% |
 | Uniform | 10.0% | 10.0% | 10.0% | 10.0% | 10.0% | 10.0% |
 
@@ -178,41 +181,47 @@ request hit ratio and 64.12% byte hit ratio; budget 16 measured 74.52% and
 64.18%. Micro Moka is not weight-aware, so these byte results are observations,
 not a weighted-eviction capability.
 
-### Admission latency and outcomes
+### Admission work and outcomes
 
-One budgeted call, with 1% all-visited resident sets:
+One budgeted call in each of 2,000 independent cache setups, with exactly 1%
+all-visited resident sets:
 
-| Outcome | Count | Rate | p50 | p99 | p99.9 | max |
-|---|---:|---:|---:|---:|---:|---:|
-| Accepted | 1,980 | 99.0% | 42 | 84 | 125 | 167 |
-| Rejected | 20 | 1.0% | 41 | 84 | 84 | 125 |
+| Outcome/path | Count | Rate | Candidate state | Resident inspections |
+|---|---:|---:|---|---:|
+| Accepted attempt (successful admission) | 1,980 | 99.0% | Inserted | Exactly 1 |
+| Rejected attempt | 20 | 1.0% | Returned; not inserted | Exactly 16 |
 
-This table does not compare rejected work with successful competitor inserts.
-The matched-outcome table below times eventual success after every resident has
-been visited:
+The 1% mix is deliberately constructed rather than an estimate of a production
+rejection probability. Counts and rates make the outcomes explicit; no latency
+quantile is inferred from either the 1,980 accepted samples or the 20 rejected
+samples.
 
-| Cache/path | p50 | p99 | p99.9 | max |
+The all-hot experiment instead accounts for the work needed to reach the same
+successful admission. Each row uses 200 independent, full 10,000-entry cache
+setups with every resident visited:
+
+| Micro Moka path | Calls per successful admission | Rejected attempts | Successful admissions | Resident inspections through success |
 |---|---:|---:|---:|---:|
-| Micro Moka exact | 12,959 | 18,333 | 18,791 | 19,750 |
-| Micro Moka budget 16, retry through success | 12,375 | 21,959 | 22,708 | 22,959 |
-| quick-cache | 23,709 | 25,458 | 26,208 | 26,375 |
-| sieve-cache 1.1.6 | 5,042 | 9,625 | 10,375 | 11,083 |
-| senba Slot16 | 42 | 208 | 584 | 45,875 |
-| lru | 41 | 83 | 83 | 83 |
+| Exact `insert` | Exactly 1 | 0 | 200 | Exactly 10,001 in one call |
+| Budget-16 `try_insert`, retry through success | Exactly 626 (625 rejected + 1 accepted) | 125,000 | 200 | Exactly 10,001 total; at most 16 per call |
 
-Budget 16 took exactly 626 attempts in every matched sample. Its value is the
-hard per-call inspection limit and explicit rejection, not lower total latency
-to eventual success. Senba and LRU are better choices when unconditional
-admission tail latency dominates and their other tradeoffs are acceptable.
+Across the 200 retry chains, 125,000 of 125,200 calls were rejected attempts
+(99.840%) and 200 were accepted attempts that successfully admitted the
+candidate (0.160%). Calls within a retry chain are sequential, not 125,200
+independent samples. The value of budgeted admission is the hard per-call
+inspection limit and explicit ownership-preserving rejection, not lower total
+work to eventual success. Competitors remain in the throughput and hit-ratio
+tables; this outcome section does not compare rejected attempts with successful
+competitor insertions.
 
 ## Limitations and Rejected Directions
 
 - Synthetic deterministic workloads expose controlled mechanisms but do not
   replace production traces. The suite omits allocator contention, large
   heap-owned values, backend miss cost, and multi-thread sharing.
-- Per-operation `Instant` measurement has timer overhead and limited resolution.
-  Percentiles are comparative evidence, not universal service objectives; the
-  rejected distribution has only 20 samples.
+- Throughput uses wall-clock measurement and is sensitive to timer, scheduler,
+  compiler, hasher, and machine effects. The admission section therefore makes
+  no per-operation nanosecond or tail-percentile claim.
 - Fixed-size entry capacity can misrepresent memory use. Micro Moka does not
   account for heap allocations owned by keys/values and does not optimize byte
   hit ratio.
@@ -222,9 +231,9 @@ admission tail latency dominates and their other tradeoffs are acceptable.
 - Weighted eviction and expiration were rejected because they add per-entry
   weight/deadline state, clock reads, cleanup, and policy coupling. `quick_cache`,
   `mini-moka`, `moka`, `stretto`, and `foyer` serve those requirements.
-- Sharding or fixed slots could beat Micro Moka on density and admission tail,
-  as Senba demonstrates, but would give up the chosen global policy, arbitrary
-  entry size, or safe-Rust implementation.
+- Sharding or fixed slots can bound unconditional admission work more tightly
+  and improve density, as Senba demonstrates, but give up the chosen global
+  policy, arbitrary entry size, or safe-Rust implementation.
 
 [sieve]: https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo
 [quick-cache]: https://github.com/arthurprs/quick-cache
