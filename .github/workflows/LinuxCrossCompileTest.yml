@@ -2,6 +2,8 @@ name: Linux cross compile tests
 
 on:
   push:
+    branches:
+      - main
     paths-ignore:
       - '.devcontainer/**'
       - '.gitpod.yml'

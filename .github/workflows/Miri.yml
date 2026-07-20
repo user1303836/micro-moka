@@ -2,6 +2,8 @@ name: Miri tests
 
 on:
   push:
+    branches:
+      - main
     paths-ignore:
       - '.devcontainer/**'
       - '.gitpod.yml'

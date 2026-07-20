@@ -2,6 +2,8 @@ name: Clippy lints and Rustfmt
 
 on:
   push:
+    branches:
+      - main
     paths-ignore:
       - '.devcontainer/**'
       - '.gitpod.yml'
