@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-20
+
+### Added
+
+- Added `Cache::try_insert`, a scan-budgeted admission path that returns a candidate when a full cache has no unvisited SIEVE victim within the configured budget.
+- Added `CacheBuilder::admission_scan_limit` and `Policy::admission_scan_limit`; the default budget is 16 inspected entries and a zero budget freezes new-key admission while full.
+- Added benchmark coverage for negative lookups, updates, delete/reinsert churn, request and synthetic byte hit ratios, short-scan resistance, admission rejection counts, and full-cache insertion percentiles.
+- Added `docs/cache-positioning.md` with ecosystem research, methodology, representative results, limitations, and the rationale for Micro Moka's latency-density positioning.
+
+### Changed
+
+- Packed the SIEVE visited bit into a nonzero predecessor link, reducing the `u64` key/value slab slot from 40 to 32 bytes while preserving safe Rust and the vacant-slot niche.
+- Reworked the README and crate documentation around exact versus scan-budgeted admission and documented where feature-rich Rust caches are a better fit.
+- Added stable CI compilation and lint coverage for the opt-in benchmark target.
+
 ## [1.1.0] - 2026-07-20
 
 ### Added

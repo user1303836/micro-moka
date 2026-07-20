@@ -3,15 +3,15 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Micro Moka is a lightweight cache library for Rust. Micro Moka is a fork
-//! of [Mini Moka][mini-moka-git], stripped down to the bare essentials.
+//! Micro Moka is a predictable, memory-dense cache library for Rust. Micro Moka
+//! is a fork of [Mini Moka][mini-moka-git], stripped down to the bare essentials.
 //!
 //! Micro Moka provides an in-memory, non-thread-safe cache implementation for
 //! single thread applications.
 //!
-//! All cache implementations perform a best-effort bounding of the map using an
-//! entry replacement algorithm to determine which entries to evict when the capacity
-//! is exceeded.
+//! A cache can be entry-bounded using SIEVE eviction or left unbounded through
+//! the builder. Exact insertion always admits at nonzero capacity, while
+//! scan-budgeted insertion may return a candidate to bound one admission attempt.
 //!
 //! [moka-git]: https://github.com/moka-rs/moka
 //! [mini-moka-git]: https://github.com/moka-rs/mini-moka
@@ -21,7 +21,11 @@
 //!
 //! - A cache can be bounded by the maximum number of entries.
 //! - Maintains good hit rate by using the SIEVE eviction algorithm (NSDI 2024),
-//!   a lazy promotion, quick demotion algorithm with O(1) eviction.
+//!   a lazy promotion, quick demotion algorithm.
+//! - Offers both exact, always-admit insertion and scan-budgeted admission that
+//!   bounds per-attempt eviction-policy work and returns rejected candidates.
+//! - Packs SIEVE's visited bit into the intrusive predecessor link to reduce
+//!   per-entry metadata without unsafe code.
 //!
 //! # Examples
 //!

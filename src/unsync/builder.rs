@@ -1,4 +1,4 @@
-use super::Cache;
+use super::{Cache, DEFAULT_ADMISSION_SCAN_LIMIT};
 
 use std::{
     collections::hash_map::RandomState,
@@ -29,6 +29,7 @@ use std::{
 pub struct CacheBuilder<K, V, C> {
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
+    admission_scan_limit: u32,
     cache_type: PhantomData<C>,
     _marker: PhantomData<(K, V)>,
 }
@@ -41,6 +42,7 @@ where
         Self {
             max_capacity: None,
             initial_capacity: None,
+            admission_scan_limit: DEFAULT_ADMISSION_SCAN_LIMIT,
             cache_type: Default::default(),
             _marker: Default::default(),
         }
@@ -63,7 +65,12 @@ where
     /// Builds a `Cache<K, V>`.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
-        Cache::with_everything(self.max_capacity, self.initial_capacity, build_hasher)
+        Cache::with_everything(
+            self.max_capacity,
+            self.initial_capacity,
+            self.admission_scan_limit,
+            build_hasher,
+        )
     }
 
     /// Builds a `Cache<K, V, S>`, with the given `hasher`.
@@ -71,7 +78,12 @@ where
     where
         S: BuildHasher,
     {
-        Cache::with_everything(self.max_capacity, self.initial_capacity, hasher)
+        Cache::with_everything(
+            self.max_capacity,
+            self.initial_capacity,
+            self.admission_scan_limit,
+            hasher,
+        )
     }
 }
 
@@ -91,6 +103,20 @@ impl<K, V, C> CacheBuilder<K, V, C> {
             ..self
         }
     }
+
+    /// Sets the maximum number of resident entries that [`Cache::try_insert`]
+    /// will inspect while looking for an unvisited SIEVE victim.
+    ///
+    /// When a full cache has no unvisited entry within this budget,
+    /// `try_insert` returns the candidate instead of continuing the sweep. A
+    /// later call resumes from the saved SIEVE hand. The default is 16. A limit
+    /// of zero rejects every new candidate while the cache is full.
+    pub fn admission_scan_limit(self, admission_scan_limit: u32) -> Self {
+        Self {
+            admission_scan_limit,
+            ..self
+        }
+    }
 }
 
 #[cfg(test)]
@@ -104,8 +130,18 @@ mod tests {
         let policy = cache.policy();
 
         assert_eq!(policy.max_capacity(), Some(100));
+        assert_eq!(policy.admission_scan_limit(), 16);
 
         cache.insert('a', "Alice".to_string());
         assert_eq!(cache.get(&'a'), Some(&"Alice".to_string()));
+    }
+
+    #[test]
+    fn configures_admission_scan_limit() {
+        let cache = CacheBuilder::<u32, u32, _>::new(100)
+            .admission_scan_limit(7)
+            .build();
+
+        assert_eq!(cache.policy().admission_scan_limit(), 7);
     }
 }

@@ -1,4 +1,4 @@
-use super::{CacheBuilder, IndexDeque, Iter, Slab, SlabEntry, SENTINEL};
+use super::{CacheBuilder, IndexDeque, Iter, Slab, SlabEntry, DEFAULT_ADMISSION_SCAN_LIMIT};
 use crate::Policy;
 
 use hashbrown::HashTable;
@@ -11,18 +11,18 @@ use std::{
 
 /// An in-memory cache that is _not_ thread-safe.
 ///
-/// `Cache` utilizes a hash table [`hashbrown::HashTable`][hb-hashtable] for the
-/// central key-value storage. `Cache` performs a best-effort bounding of the
-/// map using an entry replacement algorithm to determine which entries to evict
-/// when the capacity is exceeded.
+/// `Cache` uses [`hashbrown::HashTable`][hb-hashtable] for key lookup and a
+/// contiguous slab for key-value storage. A configured maximum capacity bounds
+/// the number of resident entries.
 ///
 /// [hb-hashtable]: https://docs.rs/hashbrown/latest/hashbrown/struct.HashTable.html
 ///
-/// # Characteristic difference between `unsync` and `sync`/`future` caches
+/// # Single-threaded by design
 ///
-/// If you use a cache from a single thread application, `unsync::Cache` may
-/// outperform other caches for updates and retrievals because other caches have some
-/// overhead on syncing internal data structures between threads.
+/// `Cache` requires mutable access for policy-updating operations and contains
+/// no synchronization. It is intended to be owned by one thread or task.
+/// [`get`](Self::get) marks a SIEVE visited bit, while [`peek`](Self::peek)
+/// provides a non-promoting lookup through a shared reference.
 ///
 /// # Examples
 ///
@@ -84,6 +84,7 @@ use std::{
 ///
 pub struct Cache<K, V, S = RandomState> {
     max_capacity: Option<u64>,
+    admission_scan_limit: u32,
     entry_count: u64,
     table: HashTable<u32>,
     build_hasher: S,
@@ -119,7 +120,12 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(Some(max_capacity), None, build_hasher)
+        Self::with_everything(
+            Some(max_capacity),
+            None,
+            DEFAULT_ADMISSION_SCAN_LIMIT,
+            build_hasher,
+        )
     }
 
     /// Returns a [`CacheBuilder`][builder-struct], which can build a `Cache` with
@@ -140,7 +146,7 @@ impl<K, V, S> Cache<K, V, S> {
     /// At this time, cache policy cannot be modified after cache creation.
     /// A future version may support to modify it.
     pub fn policy(&self) -> Policy {
-        Policy::new(self.max_capacity)
+        Policy::new(self.max_capacity, self.admission_scan_limit)
     }
 
     /// Returns the number of entries in this cache.
@@ -207,12 +213,14 @@ where
     pub(crate) fn with_everything(
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
+        admission_scan_limit: u32,
         build_hasher: S,
     ) -> Self {
         let init_cap = initial_capacity.unwrap_or_default();
 
         Self {
             max_capacity,
+            admission_scan_limit,
             entry_count: 0,
             table: HashTable::with_capacity(init_cap),
             build_hasher,
@@ -265,7 +273,7 @@ where
         };
 
         let entry = self.slab.get_mut(idx);
-        entry.visited = true;
+        entry.mark_visited();
         Some(&entry.value)
     }
 
@@ -344,39 +352,28 @@ where
             .find(hash, |&idx| self.slab.get(idx).key.borrow() == &key)
         {
             let entry = self.slab.get_mut(idx);
-            entry.visited = true;
+            entry.mark_visited();
             return &entry.value;
         }
 
         let value = f();
 
-        if !self.has_enough_capacity(1, self.entry_count) {
+        if !self.has_enough_capacity() {
             self.sieve_evict_one();
         }
 
-        let slab_entry = SlabEntry {
-            key,
-            value,
-            hash,
-            visited: false,
-            prev: SENTINEL,
-            next: SENTINEL,
-        };
-        let idx = self.slab.allocate(slab_entry);
-
-        let slab = &self.slab;
-        self.table
-            .insert_unique(hash, idx, |&existing_idx| slab.get(existing_idx).hash);
-
-        self.deque.push_back(&mut self.slab, idx);
-        self.entry_count += 1;
+        let idx = self.insert_hashed(key, value, hash);
 
         &self.slab.get(idx).value
     }
 
     /// Inserts a key-value pair into the cache.
     ///
-    /// If the cache has this key present, the value is updated.
+    /// If the cache has this key present, the value is updated. Otherwise, a
+    /// nonzero-capacity cache always admits the new entry. An exact SIEVE sweep
+    /// can inspect the whole resident set when every entry was visited; use
+    /// [`try_insert`](Self::try_insert) to place a bound on that policy work and
+    /// recover a deferred candidate.
     #[inline]
     pub fn insert(&mut self, key: K, value: V) {
         let hash = self.hash(&key);
@@ -387,11 +384,11 @@ where
         {
             let entry = self.slab.get_mut(idx);
             entry.value = value;
-            entry.visited = true;
+            entry.mark_visited();
             return;
         }
 
-        if !self.has_enough_capacity(1, self.entry_count) {
+        if !self.has_enough_capacity() {
             if self.max_capacity == Some(0) {
                 return;
             }
@@ -399,22 +396,64 @@ where
             self.sieve_evict_one();
         }
 
-        let slab_entry = SlabEntry {
-            key,
-            value,
-            hash,
-            visited: false,
-            prev: SENTINEL,
-            next: SENTINEL,
-        };
-        let idx = self.slab.allocate(slab_entry);
+        self.insert_hashed(key, value, hash);
+    }
 
-        let slab = &self.slab;
-        self.table
-            .insert_unique(hash, idx, |&existing_idx| slab.get(existing_idx).hash);
+    /// Attempts to insert a key-value pair with bounded eviction-policy work.
+    ///
+    /// Existing entries are always updated. A new entry is admitted immediately
+    /// while the cache has room. When the cache is full, this method examines at
+    /// most [`Policy::admission_scan_limit`] resident entries while looking for
+    /// an unvisited SIEVE victim. If every examined entry was visited, the
+    /// candidate is returned as `Err((key, value))` and the SIEVE hand is saved
+    /// so the next admission attempt resumes the sweep.
+    ///
+    /// This gives latency-sensitive callers a deterministic bound on SIEVE scan
+    /// work and prevents a stream of one-hit candidates from immediately
+    /// displacing recently accessed residents. Use [`insert`](Self::insert) when
+    /// every candidate must be admitted regardless of scan work.
+    ///
+    /// [`Policy::admission_scan_limit`]: crate::Policy::admission_scan_limit
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use micro_moka::unsync::Cache;
+    ///
+    /// let mut cache = Cache::builder()
+    ///     .max_capacity(2)
+    ///     .admission_scan_limit(1)
+    ///     .build();
+    /// cache.insert("a", 1);
+    /// cache.insert("b", 2);
+    /// cache.get(&"a");
+    /// cache.get(&"b");
+    ///
+    /// assert_eq!(cache.try_insert("scan", 3), Err(("scan", 3)));
+    /// assert_eq!(cache.entry_count(), 2);
+    /// ```
+    #[inline]
+    pub fn try_insert(&mut self, key: K, value: V) -> Result<(), (K, V)> {
+        let hash = self.hash(&key);
 
-        self.deque.push_back(&mut self.slab, idx);
-        self.entry_count += 1;
+        if let Some(&idx) = self
+            .table
+            .find(hash, |&idx| self.slab.get(idx).key.borrow() == &key)
+        {
+            let entry = self.slab.get_mut(idx);
+            entry.value = value;
+            entry.mark_visited();
+            return Ok(());
+        }
+
+        if !self.has_enough_capacity()
+            && (self.max_capacity == Some(0) || !self.try_sieve_evict_one())
+        {
+            return Err((key, value));
+        }
+
+        self.insert_hashed(key, value, hash);
+        Ok(())
     }
 
     /// Discards any cached value for the key.
@@ -540,27 +579,56 @@ where
     }
 
     #[inline]
-    fn has_enough_capacity(&self, candidate_weight: u32, ws: u64) -> bool {
+    fn has_enough_capacity(&self) -> bool {
         self.max_capacity
-            .map(|limit| ws + candidate_weight as u64 <= limit)
+            .map(|limit| self.entry_count < limit)
             .unwrap_or(true)
+    }
+
+    #[inline]
+    fn insert_hashed(&mut self, key: K, value: V, hash: u64) -> u32 {
+        let idx = self.slab.allocate(SlabEntry::new(key, value, hash));
+        let slab = &self.slab;
+        self.table
+            .insert_unique(hash, idx, |&existing_idx| slab.get(existing_idx).hash);
+        self.deque.push_back(&mut self.slab, idx);
+        self.entry_count += 1;
+        idx
     }
 
     #[cold]
     #[inline(never)]
     fn sieve_evict_one(&mut self) {
         if let Some(victim_idx) = self.deque.sieve_evict(&mut self.slab) {
-            let victim_hash = self.slab.get(victim_idx).hash;
-            if let Ok(entry) = self
-                .table
-                .find_entry(victim_hash, |&table_idx| table_idx == victim_idx)
-            {
-                entry.remove();
-            }
-            let removed = self.slab.deallocate(victim_idx);
-            self.entry_count -= 1;
-            drop(removed);
+            self.remove_eviction_victim(victim_idx);
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn try_sieve_evict_one(&mut self) -> bool {
+        let victim = self
+            .deque
+            .sieve_evict_with_scan_limit(&mut self.slab, self.admission_scan_limit);
+        if let Some(victim_idx) = victim {
+            self.remove_eviction_victim(victim_idx);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn remove_eviction_victim(&mut self, victim_idx: u32) {
+        let victim_hash = self.slab.get(victim_idx).hash;
+        if let Ok(entry) = self
+            .table
+            .find_entry(victim_hash, |&table_idx| table_idx == victim_idx)
+        {
+            entry.remove();
+        }
+        let removed = self.slab.deallocate(victim_idx);
+        self.entry_count -= 1;
+        drop(removed);
     }
 }
 
@@ -1331,5 +1399,134 @@ mod tests {
         cache.insert(1, 10);
         assert_eq!(cache.get(&1), Some(&10));
         assert_eq!(format!("{cache:?}"), "{1: 10}");
+    }
+
+    #[test]
+    fn try_insert_admits_below_capacity_and_updates_existing() {
+        let mut cache = Cache::new(2);
+
+        assert_eq!(cache.try_insert("a", "alice"), Ok(()));
+        assert_eq!(cache.try_insert("a", "anna"), Ok(()));
+        assert_eq!(cache.entry_count(), 1);
+        assert_eq!(cache.get(&"a"), Some(&"anna"));
+    }
+
+    #[test]
+    fn try_insert_rejects_after_bounded_hot_scan() {
+        let mut cache = Cache::builder()
+            .max_capacity(4)
+            .admission_scan_limit(2)
+            .build();
+        for key in 0..4 {
+            cache.insert(key, key);
+            cache.get(&key);
+        }
+
+        assert_eq!(cache.try_insert(4, 4), Err((4, 4)));
+        assert_eq!(cache.entry_count(), 4);
+        assert!((0..4).all(|key| cache.contains_key(&key)));
+        assert_eq!(
+            cache
+                .slab
+                .iter()
+                .filter(|(_, entry)| entry.is_visited())
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn try_insert_resumes_sweep_after_rejection() {
+        let mut cache = Cache::builder()
+            .max_capacity(4)
+            .admission_scan_limit(2)
+            .build();
+        for key in 0..4 {
+            cache.insert(key, key);
+            cache.get(&key);
+        }
+
+        assert_eq!(cache.try_insert(4, 4), Err((4, 4)));
+        assert_eq!(cache.try_insert(5, 5), Err((5, 5)));
+        assert_eq!(cache.try_insert(6, 6), Ok(()));
+        assert_eq!(cache.entry_count(), 4);
+        assert!(cache.contains_key(&6));
+    }
+
+    #[test]
+    fn try_insert_admits_when_budget_finds_unvisited_victim() {
+        let mut cache = Cache::builder()
+            .max_capacity(4)
+            .admission_scan_limit(2)
+            .build();
+        for key in 0..4 {
+            cache.insert(key, key);
+        }
+        cache.get(&3);
+
+        assert_eq!(cache.try_insert(4, 4), Ok(()));
+        assert_eq!(cache.entry_count(), 4);
+        assert!(cache.contains_key(&4));
+    }
+
+    #[test]
+    fn try_insert_zero_budget_rejects_at_capacity() {
+        let mut cache = Cache::builder()
+            .max_capacity(1)
+            .admission_scan_limit(0)
+            .build();
+        cache.insert("resident", 1);
+
+        assert_eq!(cache.try_insert("resident", 3), Ok(()));
+        assert_eq!(cache.try_insert("candidate", 2), Err(("candidate", 2)));
+        assert_eq!(cache.get(&"resident"), Some(&3));
+    }
+
+    #[test]
+    fn try_insert_zero_capacity_returns_candidate() {
+        let mut cache = Cache::new(0);
+
+        assert_eq!(cache.try_insert("candidate", 2), Err(("candidate", 2)));
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[test]
+    fn regular_insert_always_admits_after_bounded_rejection() {
+        let mut cache = Cache::builder()
+            .max_capacity(2)
+            .admission_scan_limit(1)
+            .build();
+        cache.insert(0, 0);
+        cache.insert(1, 1);
+        cache.get(&0);
+        cache.get(&1);
+
+        assert_eq!(cache.try_insert(2, 2), Err((2, 2)));
+        cache.insert(2, 2);
+
+        assert_eq!(cache.entry_count(), 2);
+        assert!(cache.contains_key(&2));
+    }
+
+    #[test]
+    fn try_insert_eviction_is_consistent_when_value_drop_panics() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let mut cache = Cache::builder()
+            .max_capacity(1)
+            .admission_scan_limit(1)
+            .build();
+        cache.insert("bomb", DropBomb(true));
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _ = cache.try_insert("new", DropBomb(false));
+        }));
+        assert!(result.is_err());
+        assert_eq!(cache.entry_count(), 0);
+        assert_eq!(cache.table.len(), 0);
+        assert_eq!(cache.slab.iter().count(), 0);
+
+        cache.insert("safe", DropBomb(false));
+        assert!(cache.contains_key(&"safe"));
     }
 }

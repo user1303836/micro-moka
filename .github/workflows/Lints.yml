@@ -43,6 +43,11 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --lib --tests --all-features -- -D warnings
 
+      - name: Check benchmark target
+        env:
+          RUSTFLAGS: --cfg bench_deps
+        run: cargo clippy --bench benchmark -- -D warnings
+
       - name: Run Rustfmt
         if: ${{ matrix.rust == 'stable' }}
         run: cargo fmt --all -- --check
