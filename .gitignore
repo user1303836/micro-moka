@@ -2,7 +2,8 @@
 **/*~
 .DS_Store
 /target/
-Cargo.lock
+/benches/target/
+/Cargo.lock
 node_modules/
 tsconfig.json
 index.ts

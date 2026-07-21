@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-20
+
+### Added
+
+- Added `Cache::try_insert`, a scan-budgeted admission path that returns a candidate when a full cache has no unvisited SIEVE victim within the configured budget.
+- Added `CacheBuilder::admission_scan_limit` and `Policy::admission_scan_limit`; the default budget is 16 inspected entries and a zero budget freezes new-key admission while full.
+- Added benchmark coverage for negative lookups, updates, delete/reinsert churn, request and synthetic byte hit ratios, scan filtering, admission outcome counts and rates, and deterministic successful-admission retry work.
+- Added direct, exactly pinned benchmark comparisons with `sieve-cache` 1.1.6 and `senba` 0.2.0.
+- Added a standalone, non-published benchmark package with a lockfile covering transitive dependencies, plus standard all-target CI validation for the library.
+- Added `docs/cache-positioning.md` with ecosystem research, methodology, representative results, limitations, and the rationale for Micro Moka's safe, predictable admission positioning.
+
+### Changed
+
+- Packed the SIEVE visited bit into a nonzero predecessor link, reducing the `u64` key/value slab slot from 40 to 32 bytes while preserving safe Rust and the vacant-slot niche.
+- Reworked the README and crate documentation around exact versus scan-budgeted admission and documented where feature-rich Rust caches are a better fit.
+- Added stable CI compilation and lint coverage for the opt-in benchmark target.
+
+### Fixed
+
+- Corrected SIEVE traversal to start at the oldest resident and move toward newer residents, preserving FIFO eviction when every resident is unvisited.
+- Removed unsupported high-percentile latency claims from small admission samples and replaced them with outcome-separated counts, rates, candidate disposition, and algorithmic scan/retry evidence.
+- Isolated the Rust 1.85 benchmark toolchain from the Rust 1.76 library graph, so `cargo test --all-targets --all-features` is a standard passing workflow.
+- Clarified the documented zero-capacity exception for `get_or_insert_with`.
+
 ## [1.1.0] - 2026-07-20
 
 ### Added

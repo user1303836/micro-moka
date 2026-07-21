@@ -1,34 +1,29 @@
 [package]
 name = "micro-moka"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 rust-version = "1.76"
+autobenches = false
 
-description = "A lightweight, single-threaded cache library with SIEVE eviction"
+description = "A predictable, safe-Rust single-threaded cache with bounded SIEVE admission"
 license = "MIT OR Apache-2.0"
 # homepage = "https://"
 documentation = "https://docs.rs/micro-moka/"
 repository = "https://github.com/user1303836/micro-moka"
-keywords = ["cache"]
+keywords = ["cache", "sieve", "latency"]
 categories = ["caching"]
 readme = "README.md"
-exclude = [".circleci", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
+exclude = [
+    ".circleci",
+    ".devcontainer",
+    ".github",
+    ".gitpod.yml",
+    ".vscode",
+    "benches",
+]
 
 [dependencies]
 hashbrown = { version = "0.16", default-features = false, features = ["inline-more"] }
-
-[target.'cfg(bench_deps)'.dev-dependencies]
-quick_cache = "0.7"
-lru = "0.18"
-hashlink = "0.12"
-mini-moka = "0.10"
-rand = "0.10"
-rand_distr = "0.6"
-ahash = "0.8.12"
-
-[[bench]]
-name = "benchmark"
-harness = false
 
 # https://docs.rs/about/metadata
 [package.metadata.docs.rs]
@@ -39,12 +34,3 @@ rustdoc-args = ["--cfg", "docsrs"]
 [profile.release]
 lto = true
 codegen-units = 1
-
-[profile.bench]
-lto = true
-codegen-units = 1
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = [
-    "cfg(bench_deps)",
-] }

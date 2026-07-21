@@ -5,10 +5,9 @@
 [![docs][docs-badge]][docs]
 [![license][license-badge]](#license)
 
-A fast, lightweight, single-threaded cache for Rust. Micro Moka is forked from
-[Mini Moka][mini-moka-git] and intentionally omits async support, synchronization,
-weighted eviction, and expiration. It provides a bounded cache using the
-[SIEVE][sieve-paper] eviction policy.
+A predictable, safe-Rust, single-threaded cache. Micro Moka is forked from
+[Mini Moka][mini-moka-git] and uses the [SIEVE][sieve-paper] eviction policy
+without locks, atomics, unsafe code, background work, or an async runtime.
 
 ```rust
 use micro_moka::unsync::Cache;
@@ -18,18 +17,39 @@ cache.insert("key", "value");
 assert_eq!(cache.get(&"key"), Some(&"value"));
 ```
 
-## Why Micro Moka?
+## The Design Point
 
-**Efficient eviction.** SIEVE gives accessed entries a second chance using one
-visited bit per entry and a persistent hand. Cache hits do not reorder a recency
-list, keeping the read path small.
+Cache design is a multi-objective problem: hit ratio, byte hit ratio, average
+latency, tail latency, throughput, metadata density, expiration, weighting,
+and concurrency all compete. Micro Moka deliberately targets one Pareto point:
+single-owner caches that need a global SIEVE policy, arbitrary-size entries,
+Rust 1.76 support, and explicitly bounded admission work.
 
-**Minimal overhead.** The only production dependency is `hashbrown`. There is no
-async runtime, lock, atomic, custom allocator, or unsafe code in Micro Moka.
+- **Budgeted admission.** `try_insert` examines at most 16 SIEVE candidates by
+  default. If all were recently visited, it returns the candidate instead of
+  extending the sweep. The next attempt resumes at the saved hand. This bounds
+  eviction-policy work, spreads a hot sweep across requests, and resists short
+  one-hit scans.
+- **Exact insertion remains available.** `insert` always admits a nonzero-
+  capacity candidate and runs the original SIEVE sweep to completion. Choose
+  exact admission when every new value must become resident.
+- **Compact safe-Rust metadata.** The visited flag is packed into the nonzero
+  predecessor link. On the supported targets, an `Option`-wrapped slab slot for
+  `u64` keys and values is 32 bytes, down from 40 bytes in v1.1.0. This excludes
+  hash-table storage and allocations owned by the key or value. This is not an
+  ecosystem density record: Senba offers a specialized 16-byte fixed slot for
+  the same primitive pair.
+- **A small read path.** A hit performs one hash-table lookup and one visited-bit
+  update. It never relinks an entry. A miss does not touch SIEVE metadata.
+- **Operationally small.** The only production dependency is `hashbrown`.
+  `RandomState` remains the HashDoS-resistant default; trusted-key workloads
+  can opt into a faster hasher.
 
-**Single-threaded by design.** If a cache belongs to one thread, such as in CLI
-tools, WASM applications, game loops, compilers, or single-threaded servers, it
-does not need to pay synchronization costs.
+The benchmark suite measures hits, negative lookups, inserts, updates,
+delete-and-reinsert churn, mixed workloads, request and byte hit ratios,
+scan filtering, admission-attempt outcomes, and matched successful-admission
+retry accounting. See
+[benchmark report](./docs/cache-positioning.md) for methodology, results, and limitations.
 
 ## Installation
 
@@ -46,17 +66,23 @@ use micro_moka::unsync::Cache;
 let mut cache: Cache<&str, i32> = Cache::builder()
     .max_capacity(1_000)
     .initial_capacity(100)
+    .admission_scan_limit(16)
     .build();
 
 cache.insert("key", 42);
 assert_eq!(cache.get(&"key"), Some(&42));
 assert!(cache.contains_key(&"key"));
 
-// Inspect without affecting SIEVE eviction state.
+// Inspect without affecting SIEVE state.
 assert_eq!(cache.peek(&"key"), Some(&42));
 
-// Compute a missing value once.
+// Compute a missing value once using exact, always-admit insertion.
 assert_eq!(cache.get_or_insert_with("other", || 7), &7);
+
+// Bound eviction scanning and retain ownership if admission is deferred.
+if let Err((key, value)) = cache.try_insert("candidate", 9) {
+    assert_eq!((key, value), ("candidate", 9));
+}
 
 cache.invalidate(&"key");
 let removed = cache.remove(&"other");
@@ -74,11 +100,26 @@ cache.invalidate_all();
 assert_eq!(cache.entry_count(), 0);
 ```
 
+### Choosing an Insertion Path
+
+| Requirement | Method | Full, all-hot cache |
+|---|---|---|
+| Every candidate must become resident | `insert` | Sweeps until it finds a victim |
+| Bound policy scan work | `try_insert` | Returns `Err((K, V))` after the configured budget |
+| Load once and borrow the result | `get_or_insert_with` | Uses exact insertion |
+
+`try_insert` always updates an existing key and always admits below capacity.
+A scan limit of zero freezes admission of new keys while full. A larger limit
+makes the policy approach exact SIEVE; a smaller limit protects hot residents
+more aggressively and rejects more candidates. Rejection is observable through
+the returned `Result`, so applications can count, retry, or bypass the cache
+without enabling internal statistics.
+
 ### Custom Hashers
 
 The default hasher is `RandomState`, the same HashDoS-resistant default used by
-`std::collections::HashMap`. A faster hasher can improve throughput when all keys
-are trusted:
+`std::collections::HashMap`. A faster hasher can materially improve throughput
+when all keys are trusted:
 
 ```rust,ignore
 use micro_moka::unsync::Cache;
@@ -88,29 +129,45 @@ let mut cache: Cache<String, String, ahash::RandomState> = Cache::builder()
     .build_with_hasher(ahash::RandomState::default());
 ```
 
-## How SIEVE Works
+## How SIEVE and Budgeted Admission Work
 
 Entries remain in insertion order. Each entry has one visited bit, and the cache
-maintains a hand into the entry list:
+maintains a hand into the list:
 
-1. A successful `get` marks the entry as visited without moving it.
-2. When space is needed, the hand scans entries and clears visited bits.
-3. The first unvisited entry is evicted.
-4. The new entry is admitted unconditionally.
+1. A successful `get`, update, or `get_or_insert_with` hit marks the entry as
+   visited without moving it.
+2. Exact eviction starts at the oldest resident, clears visited bits while
+   moving toward newer residents, and evicts the first unvisited entry.
+3. Budgeted admission performs the same sweep for at most the configured number
+   of entries.
+4. If the budget expires, `try_insert` saves the hand and returns the candidate.
+   Otherwise it evicts the unvisited victim and admits the candidate.
 
-The hand persists between evictions, so the work of scanning visited entries is
-amortized while cache hits remain constant-time table lookups plus one bit write.
+The exact sweep is amortized constant work, but a single insertion can inspect
+the whole cache when every resident was visited. `try_insert` exists for callers
+that need a hard bound on one operation's policy scan work.
+
 `peek`, `contains_key`, and iteration do not set the visited bit.
 
-## What Was Removed from Mini Moka
+## Ecosystem Fit
 
-| Feature | Rationale |
-|---------|-----------|
-| Concurrent cache | Eliminates locks and atomics |
-| Async support | Avoids a runtime dependency |
-| Weight-based eviction | Every entry occupies one slot |
-| TTL and TTI expiration | Avoids timer and maintenance overhead |
-| W-TinyLFU admission | SIEVE uses a one-bit second-chance policy |
+Micro Moka does not try to replace every Rust cache:
+
+| Need | Better fit |
+|---|---|
+| Safe-Rust, Rust 1.76, arbitrary-size entries, global SIEVE, and explicit bounded admission | Micro Moka `try_insert` |
+| Single-owner cache where every candidate must be retained immediately | Micro Moka `insert` or [`lru`][lru-git] |
+| Fixed 16/32/64-byte slots, unsafe/SIMD specialization, and bounded sharded SIEVE work | [`senba`][senba-git] |
+| A published core SIEVE API plus sync and sharded wrappers | [`sieve-cache`][sieve-cache-git] |
+| Weighted capacity, S3-FIFO, pinning, or sync and unsync variants | [`quick_cache`][quick-cache-git] |
+| Unsync weighting, TTL, TTI, and Window TinyLFU | [`mini-moka`][mini-moka-git] |
+| Per-entry expiry, listeners, async loading, or concurrent TinyLFU | [`moka`][moka-git] |
+| Strict LRU with a broad map-like API | [`lru`][lru-git] or [`hashlink`][hashlink-git] |
+
+Micro Moka intentionally omits weighted capacity and expiration. Those features
+need more per-entry state, clock reads, cleanup machinery, or policy coupling and
+would weaken this crate's predictability-density position. Values may still be
+`Option<T>` for negative caching, and callers can invalidate entries explicitly.
 
 ## Minimum Supported Rust Version
 
@@ -126,8 +183,8 @@ cargo fmt --all -- --check
 cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' doc --no-deps
 cargo +nightly miri test --lib --all-features
 
-# Benchmark dependencies are opt-in.
-RUSTFLAGS='--cfg bench_deps' cargo bench --bench benchmark
+# Benchmarks require Rust 1.85 and have a separate, locked dependency graph.
+cargo run --release --locked --manifest-path benches/Cargo.toml
 ```
 
 ## Releases
@@ -136,7 +193,7 @@ Merges to `main` are released automatically. See [RELEASING.md](./RELEASING.md).
 
 ## Credits
 
-SIEVE was introduced by Yang et al. at NSDI 2024. Micro Moka was forked from
+SIEVE was introduced by Zhang et al. at NSDI 2024. Micro Moka was forked from
 [Mini Moka][mini-moka-git] by Tatsuya Kawano and the Moka contributors.
 
 ## License
@@ -152,4 +209,10 @@ MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) and
 [crate]: https://crates.io/crates/micro-moka
 [docs]: https://docs.rs/micro-moka
 [mini-moka-git]: https://github.com/moka-rs/mini-moka
+[sieve-cache-git]: https://github.com/jedisct1/rust-sieve-cache
+[senba-git]: https://github.com/saka1/senba-cache
 [sieve-paper]: https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo
+[quick-cache-git]: https://github.com/arthurprs/quick-cache
+[moka-git]: https://github.com/moka-rs/moka
+[lru-git]: https://github.com/jeromefroe/lru-rs
+[hashlink-git]: https://github.com/djc/hashlink
