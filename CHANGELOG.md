@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Refreshed the isolated benchmark dependency lockfile and audit both dependency graphs with warnings denied.
 - Reused hash table, slab, and free-list allocations across `invalidate_all`, with a cheap empty-cache path and panic-safe cleanup.
+- Made iterator counting and empty-cache iteration constant-time; used existing deque links for very sparse iteration without extra entry storage.
+- Added deterministic model/invariant tests spanning exact and budgeted admission, collisions, loading, invalidation, and iterator density transitions.
 
 ## [1.2.0] - 2026-07-20
 

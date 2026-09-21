@@ -32,6 +32,7 @@ pub trait Cache<K: Key, S: BuildHasher>: Sized {
     fn remove(&mut self, key: &K);
     fn clear(&mut self);
     fn sum(&self) -> u64;
+    fn sum_for(&self) -> u64;
     fn count(&self) -> usize;
 }
 
@@ -70,6 +71,13 @@ macro_rules! micro_adapter {
             }
             fn sum(&self) -> u64 {
                 self.0.iter().fold(0u64, |sum, (_, v)| sum.wrapping_add(*v))
+            }
+            fn sum_for(&self) -> u64 {
+                let mut sum = 0u64;
+                for (_, value) in self.0.iter() {
+                    sum = sum.wrapping_add(*value);
+                }
+                sum
             }
             fn count(&self) -> usize {
                 self.0.iter().count()
@@ -129,6 +137,13 @@ impl<K: Key, S: BuildHasher> Cache<K, S> for Quick<K, S> {
     fn sum(&self) -> u64 {
         self.0.iter().fold(0u64, |sum, (_, v)| sum.wrapping_add(*v))
     }
+    fn sum_for(&self) -> u64 {
+        let mut sum = 0u64;
+        for (_, value) in self.0.iter() {
+            sum = sum.wrapping_add(*value);
+        }
+        sum
+    }
     fn count(&self) -> usize {
         self.0.iter().count()
     }
@@ -159,6 +174,13 @@ impl<K: Key, S: BuildHasher> Cache<K, S> for Lru<K, S> {
     }
     fn sum(&self) -> u64 {
         self.0.iter().fold(0u64, |sum, (_, v)| sum.wrapping_add(*v))
+    }
+    fn sum_for(&self) -> u64 {
+        let mut sum = 0u64;
+        for (_, value) in self.0.iter() {
+            sum = sum.wrapping_add(*value);
+        }
+        sum
     }
     fn count(&self) -> usize {
         self.0.iter().count()
@@ -193,6 +215,13 @@ impl<K: Key, S: BuildHasher> Cache<K, S> for Hashlink<K, S> {
     fn sum(&self) -> u64 {
         self.0.iter().fold(0u64, |sum, (_, v)| sum.wrapping_add(*v))
     }
+    fn sum_for(&self) -> u64 {
+        let mut sum = 0u64;
+        for (_, value) in self.0.iter() {
+            sum = sum.wrapping_add(*value);
+        }
+        sum
+    }
     fn count(&self) -> usize {
         self.0.iter().count()
     }
@@ -210,6 +239,7 @@ mod tests {
         }
         assert_eq!(c.count(), 8);
         assert_eq!(c.sum(), 28);
+        assert_eq!(c.sum_for(), 28);
         assert_eq!(c.get(&"2".into()), Some(2));
         assert_eq!(c.get(&"absent".into()), None);
         assert_eq!(c.load(&"2".into()), 2);

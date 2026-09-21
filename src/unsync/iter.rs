@@ -1,21 +1,87 @@
-use super::SlabEntry;
+use super::{SlabEntry, SENTINEL};
 use std::iter::FusedIterator;
 
 pub struct Iter<'i, K, V> {
+    inner: Inner<'i, K, V>,
+}
+
+enum Inner<'i, K, V> {
+    Dense(Dense<'i, K, V>),
+    Sparse(Sparse<'i, K, V>),
+}
+
+struct Dense<'i, K, V> {
     inner: std::slice::Iter<'i, Option<SlabEntry<K, V>>>,
     remaining: usize,
 }
 
+struct Sparse<'i, K, V> {
+    entries: &'i [Option<SlabEntry<K, V>>],
+    next: u32,
+    remaining: usize,
+}
+
 impl<'i, K, V> Iter<'i, K, V> {
-    pub(crate) fn new(entries: &'i [Option<SlabEntry<K, V>>], remaining: usize) -> Self {
-        Self {
-            inner: entries.iter(),
-            remaining,
-        }
+    #[inline]
+    pub(crate) fn new(entries: &'i [Option<SlabEntry<K, V>>], remaining: usize, head: u32) -> Self {
+        let inner = if remaining == 0 {
+            Inner::Dense(Dense {
+                inner: [].iter(),
+                remaining,
+            })
+        } else if remaining <= entries.len() / 32 {
+            // Following links loses locality at moderate occupancy. Only skip
+            // the slab scan when at least 31 of every 32 slots are vacant.
+            Inner::Sparse(Sparse {
+                entries,
+                next: head,
+                remaining,
+            })
+        } else {
+            Inner::Dense(Dense {
+                inner: entries.iter(),
+                remaining,
+            })
+        };
+        Self { inner }
     }
 }
 
 impl<'i, K, V> Iterator for Iter<'i, K, V> {
+    type Item = (&'i K, &'i V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            Inner::Dense(iter) => iter.next(),
+            Inner::Sparse(iter) => iter.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = match &self.inner {
+            Inner::Dense(iter) => iter.remaining,
+            Inner::Sparse(iter) => iter.remaining,
+        };
+        (remaining, Some(remaining))
+    }
+
+    fn count(self) -> usize {
+        self.len()
+    }
+
+    #[inline]
+    fn fold<B, F>(self, init: B, f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        match self.inner {
+            Inner::Dense(iter) => iter.fold(init, f),
+            Inner::Sparse(iter) => iter.fold(init, f),
+        }
+    }
+}
+
+impl<'i, K, V> Iterator for Dense<'i, K, V> {
     type Item = (&'i K, &'i V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -31,10 +97,109 @@ impl<'i, K, V> Iterator for Iter<'i, K, V> {
         }
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
+    #[inline]
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        self.inner.as_slice().chunks(64).fold(init, |acc, chunk| {
+            chunk.iter().fold(acc, |acc, slot| match slot {
+                Some(entry) => f(acc, (&entry.key, &entry.value)),
+                None => acc,
+            })
+        })
+    }
+}
+
+impl<'i, K, V> Iterator for Sparse<'i, K, V> {
+    type Item = (&'i K, &'i V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next == SENTINEL {
+            return None;
+        }
+        let entry = self.entries[self.next as usize]
+            .as_ref()
+            .expect("iterator link to vacant slot");
+        self.next = entry.next;
+        self.remaining -= 1;
+        Some((&entry.key, &entry.value))
     }
 }
 
 impl<K, V> ExactSizeIterator for Iter<'_, K, V> {}
 impl<K, V> FusedIterator for Iter<'_, K, V> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sparse_iteration_follows_links_across_holes() {
+        let mut entries: Vec<_> = (0..128).map(|_| None).collect();
+        entries[1] = Some(SlabEntry::new(1, 2, 0));
+        entries[111] = Some(SlabEntry::new(3, 4, 0));
+        entries[1].as_mut().unwrap().next = 111;
+        let mut iter = Iter::new(&entries, 2, 1);
+        assert!(matches!(iter.inner, Inner::Sparse(_)));
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+        assert_eq!(iter.next(), Some((&1, &2)));
+        assert_eq!(iter.size_hint(), (1, Some(1)));
+        assert_eq!(iter.fold(0, |acc, (_, v)| acc + v), 4);
+        assert_eq!(Iter::new(&entries, 2, 1).count(), 2);
+        assert_eq!(Iter::new(&entries, 2, 1).fold(0, |acc, (_, v)| acc + v), 6);
+    }
+
+    #[test]
+    fn dense_iteration_skips_holes_and_counts_partial_consumption() {
+        let entries = [
+            Some(SlabEntry::new(1, 2, 0)),
+            None,
+            Some(SlabEntry::new(3, 4, 0)),
+        ];
+        let mut iter = Iter::new(&entries, 2, 0);
+        assert!(matches!(iter.inner, Inner::Dense(_)));
+        assert_eq!(iter.next(), Some((&1, &2)));
+        assert_eq!(iter.len(), 1);
+        assert_eq!(iter.next(), Some((&3, &4)));
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter.count(), 0);
+        assert_eq!(Iter::new(&entries, 2, 0).fold(0, |acc, (_, v)| acc + v), 6);
+    }
+
+    #[test]
+    fn sparse_exhaustion_is_fused() {
+        let mut entries: Vec<_> = (0..64).map(|_| None).collect();
+        entries[2] = Some(SlabEntry::new(1, 2, 0));
+        let mut iter = Iter::new(&entries, 1, 2);
+        assert_eq!(iter.next(), Some((&1, &2)));
+        assert_eq!(iter.len(), 0);
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter.fold(0, |acc, (_, v)| acc + v), 0);
+    }
+
+    #[test]
+    fn short_circuiting_iteration_can_resume_in_both_modes() {
+        for span in [3, 128] {
+            let mut entries: Vec<_> = (0..span).map(|_| None).collect();
+            entries[0] = Some(SlabEntry::new(1, 2, 0));
+            entries[span - 1] = Some(SlabEntry::new(3, 4, 0));
+            entries[0].as_mut().unwrap().next = (span - 1) as u32;
+            let mut iter = Iter::new(&entries, 2, 0);
+            assert_eq!(iter.try_fold(0, |_, (_, v)| Err::<i32, _>(*v)), Err(2));
+            assert_eq!(iter.len(), 1);
+            assert_eq!(iter.fold(0, |acc, (_, v)| acc + v), 4);
+        }
+    }
+
+    #[test]
+    fn empty_iterator_does_not_scan_vacant_slots() {
+        let entries: [Option<SlabEntry<u64, u64>>; 3] = [None, None, None];
+        let mut iter = Iter::new(&entries, 0, SENTINEL);
+        assert!(matches!(&iter.inner, Inner::Dense(inner) if inner.inner.len() == 0));
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter.count(), 0);
+    }
+}

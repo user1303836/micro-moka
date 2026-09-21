@@ -17,6 +17,11 @@ const CASES: &[&str] = &[
     "clear-refill",
     "clear-empty",
     "iter-dense",
+    "iter-dense-for",
+    "iter-density-1pct",
+    "iter-density-6pct",
+    "iter-density-quarter",
+    "iter-density-half",
     "iter-front",
     "iter-back",
     "iter-empty",
@@ -145,10 +150,17 @@ fn bench<K: Key, S: BuildHasher, C: Cache<K, S>>(
         c.insert(key.clone(), i as u64);
     }
     assert_eq!(c.count(), capacity);
-    if case == "iter-front" || case == "iter-back" || case == "iter-empty" || case == "iter-count" {
+    if case.starts_with("iter-") && !case.starts_with("iter-dense") {
         for (i, key) in keys[..capacity].iter().enumerate() {
-            let keep = (case == "iter-front" || case == "iter-count") && i == 0
-                || case == "iter-back" && i == capacity - 1;
+            let keep = match case {
+                "iter-front" | "iter-count" => i == 0,
+                "iter-back" => i == capacity - 1,
+                "iter-density-1pct" => i % 100 == 0,
+                "iter-density-6pct" => i % 16 == 0,
+                "iter-density-quarter" => i % 4 == 0,
+                "iter-density-half" => i % 2 == 0,
+                _ => false,
+            };
             if !keep {
                 c.remove(key);
             }
@@ -242,6 +254,15 @@ fn bench<K: Key, S: BuildHasher, C: Cache<K, S>>(
                 }
             },
             256,
+            duration,
+        ),
+        "iter-dense-for" => timed(
+            || {
+                for _ in 0..32 {
+                    black_box(black_box(&c).sum_for());
+                }
+            },
+            32,
             duration,
         ),
         "iter-count" => timed(
