@@ -1,0 +1,47 @@
+diff --git c/src/unsync/iter.rs w/src/unsync/iter.rs
+index e24b421..fc1b775 100644
+--- c/src/unsync/iter.rs
++++ w/src/unsync/iter.rs
+@@ -69,7 +69,7 @@ impl<'i, K, V> Iterator for Iter<'i, K, V> {
+         self.len()
+     }
+ 
+-    #[inline]
++    #[inline(always)]
+     fn fold<B, F>(self, init: B, f: F) -> B
+     where
+         F: FnMut(B, Self::Item) -> B,
+@@ -84,6 +84,7 @@ impl<'i, K, V> Iterator for Iter<'i, K, V> {
+ impl<'i, K, V> Iterator for Dense<'i, K, V> {
+     type Item = (&'i K, &'i V);
+ 
++    #[inline(always)]
+     fn next(&mut self) -> Option<Self::Item> {
+         loop {
+             match self.inner.next() {
+@@ -96,24 +97,12 @@ impl<'i, K, V> Iterator for Dense<'i, K, V> {
+             }
+         }
+     }
+-
+-    #[inline]
+-    fn fold<B, F>(self, init: B, mut f: F) -> B
+-    where
+-        F: FnMut(B, Self::Item) -> B,
+-    {
+-        self.inner.as_slice().chunks(64).fold(init, |acc, chunk| {
+-            chunk.iter().fold(acc, |acc, slot| match slot {
+-                Some(entry) => f(acc, (&entry.key, &entry.value)),
+-                None => acc,
+-            })
+-        })
+-    }
+ }
+ 
+ impl<'i, K, V> Iterator for Sparse<'i, K, V> {
+     type Item = (&'i K, &'i V);
+ 
++    #[inline(always)]
+     fn next(&mut self) -> Option<Self::Item> {
+         if self.next == SENTINEL {
+             return None;

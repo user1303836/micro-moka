@@ -1,0 +1,33 @@
+diff --git c/benches/compare.rs w/benches/compare.rs
+index b3d3bdd..88a1549 100644
+--- c/benches/compare.rs
++++ w/benches/compare.rs
+@@ -152,6 +152,16 @@ fn timed(mut batch: impl FnMut(), operations: usize, duration: Duration) -> f64
+     }
+ }
+ 
++#[inline(never)]
++fn timed_fixed(mut batch: impl FnMut(), operations: usize) -> f64 {
++    batch();
++    let start = Instant::now();
++    for _ in 0..256 {
++        batch();
++    }
++    start.elapsed().as_secs_f64() * 1e9 / (256.0 * operations as f64)
++}
++
+ #[inline]
+ fn mixed_batch<K: Key, S: BuildHasher, C: Cache<K, S>>(c: &mut C, keys: &[K], indices: &[usize]) {
+     let capacity = keys.len() / 2;
+@@ -247,10 +257,9 @@ fn bench<K: Key, S: BuildHasher, C: Cache<K, S>>(
+             keys.len(),
+             duration,
+         ),
+-        "mixed-95" => timed(
++        "mixed-95" => timed_fixed(
+             || mixed_batch::<K, S, C>(&mut c, keys, indices),
+             indices.len(),
+-            duration,
+         ),
+         "load-hit" => timed(
+             || {

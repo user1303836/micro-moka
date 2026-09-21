@@ -368,6 +368,54 @@ where
         &self.slab.get(idx).value
     }
 
+    /// Returns the value for a borrowed key, computing and inserting it on a miss.
+    ///
+    /// Unlike [`get_or_insert_with`](Self::get_or_insert_with), this method only
+    /// constructs an owned key when the key is absent. On a hit, neither `f` nor
+    /// [`ToOwned::to_owned`] is called, and the entry is marked as visited.
+    ///
+    /// `Hash` and `Eq` on the borrowed key must match those for the owned key.
+    /// The value and owned key are constructed before any resident is evicted;
+    /// a panic in either operation leaves the cache unchanged.
+    ///
+    /// Like `get_or_insert_with`, this method retains one entry even at zero
+    /// capacity so it can return a reference. A later miss replaces that entry.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use micro_moka::unsync::Cache;
+    ///
+    /// let mut cache: Cache<String, usize> = Cache::new(100);
+    /// assert_eq!(cache.get_or_insert_with_ref("name", || 42), &42);
+    /// assert_eq!(cache.get_or_insert_with_ref("name", || unreachable!()), &42);
+    /// ```
+    #[inline]
+    pub fn get_or_insert_with_ref<Q, F>(&mut self, key: &Q, f: F) -> &V
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ToOwned<Owned = K> + ?Sized,
+        F: FnOnce() -> V,
+    {
+        let hash = self.hash(key);
+        if let Some(&idx) = self
+            .table
+            .find(hash, |&idx| self.slab.get(idx).key.borrow() == key)
+        {
+            let entry = self.slab.get_mut(idx);
+            entry.mark_visited();
+            return &entry.value;
+        }
+
+        let value = f();
+        let owned_key = key.to_owned();
+        if !self.has_enough_capacity() {
+            self.sieve_evict_one();
+        }
+        let idx = self.insert_hashed(owned_key, value, hash);
+        &self.slab.get(idx).value
+    }
+
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated. Otherwise, a
@@ -509,28 +557,15 @@ where
         }
     }
 
-    /// Discards all cached values.
-    #[cold]
-    #[inline(never)]
+    /// Discards all cached values, retaining allocated storage for reuse.
+    ///
+    /// If a key or value destructor panics, the cache is left empty and usable,
+    /// but the slab allocation may be released during unwinding.
+    #[inline]
     pub fn invalidate_all(&mut self) {
-        let old_capacity = self.table.capacity();
-        let old_slab_capacity = self.slab.entries.capacity();
-        let old_table = std::mem::replace(&mut self.table, HashTable::new());
-        let old_slab = std::mem::replace(&mut self.slab, Slab::new());
-        self.deque.clear();
-        self.entry_count = 0;
-
-        drop(old_table);
-        drop(old_slab);
-
-        self.table.reserve(old_capacity, |&idx| {
-            // This closure is for rehashing during reserve. Since the table is
-            // empty after the swap, this will never be called, but we must
-            // provide it.
-            let _ = idx;
-            0
-        });
-        self.slab.entries.reserve(old_slab_capacity);
+        if self.entry_count != 0 {
+            self.clear_entries();
+        }
     }
 
     /// Discards cached values that satisfy a predicate.
@@ -599,6 +634,21 @@ where
 
     #[cold]
     #[inline(never)]
+    fn clear_entries(&mut self) {
+        self.table.clear();
+        let mut old_slab = std::mem::replace(&mut self.slab, Slab::new());
+        self.deque.clear();
+        self.entry_count = 0;
+
+        // Detach residents before invoking user destructors so unwinding leaves
+        // no table or deque index pointing into partially cleared storage.
+        old_slab.entries.clear();
+        old_slab.free_list.clear();
+        self.slab = old_slab;
+    }
+
+    #[cold]
+    #[inline(never)]
     fn sieve_evict_one(&mut self) {
         if let Some(victim_idx) = self.deque.sieve_evict(&mut self.slab) {
             self.remove_eviction_victim(victim_idx);
@@ -634,8 +684,144 @@ where
 }
 
 #[cfg(test)]
+mod model;
+
+#[cfg(test)]
 mod tests {
     use super::Cache;
+
+    #[test]
+    fn borrowed_loader_supports_unsized_keys_and_fn_once() {
+        let mut cache: Cache<String, String> = Cache::new(2);
+        let value = String::from("computed");
+        assert_eq!(cache.get_or_insert_with_ref("key", || value), "computed");
+        assert_eq!(
+            cache.get_or_insert_with_ref("key", || panic!("hit")),
+            "computed"
+        );
+        assert_eq!(cache.entry_count(), 1);
+        let mut bytes: Cache<Vec<u8>, u64> = Cache::new(2);
+        assert_eq!(bytes.get_or_insert_with_ref(&b"key"[..], || 7), &7);
+        assert_eq!(bytes.peek(&b"key"[..]), Some(&7));
+    }
+
+    #[test]
+    fn borrowed_loader_marks_hits_and_preserves_exact_eviction() {
+        let mut cache: Cache<String, u64> = Cache::new(2);
+        cache.get_or_insert_with_ref("a", || 1);
+        cache.get_or_insert_with_ref("b", || 2);
+        cache.get_or_insert_with_ref("a", || panic!("hit"));
+        cache.get_or_insert_with_ref("c", || 3);
+        assert_eq!(cache.peek("a"), Some(&1));
+        assert_eq!(cache.peek("b"), None);
+        assert_eq!(cache.peek("c"), Some(&3));
+        assert_eq!(cache.entry_count(), 2);
+    }
+
+    #[test]
+    fn borrowed_loader_zero_capacity_matches_owned_loader() {
+        let mut cache: Cache<String, u64> = Cache::new(0);
+        assert_eq!(cache.get_or_insert_with_ref("a", || 1), &1);
+        assert_eq!(cache.get_or_insert_with_ref("a", || panic!("hit")), &1);
+        assert_eq!(cache.get_or_insert_with_ref("b", || 2), &2);
+        assert_eq!(cache.entry_count(), 1);
+        assert_eq!(cache.peek("a"), None);
+    }
+
+    #[test]
+    fn borrowed_loader_constructs_key_only_on_miss_and_hashes_once() {
+        use std::{
+            cell::Cell,
+            hash::{Hash, Hasher},
+            rc::Rc,
+        };
+        struct Key {
+            id: u32,
+            clones: Rc<Cell<usize>>,
+            hashes: Rc<Cell<usize>>,
+        }
+        impl Clone for Key {
+            fn clone(&self) -> Self {
+                self.clones.set(self.clones.get() + 1);
+                Self {
+                    id: self.id,
+                    clones: self.clones.clone(),
+                    hashes: self.hashes.clone(),
+                }
+            }
+        }
+        impl PartialEq for Key {
+            fn eq(&self, other: &Self) -> bool {
+                self.id == other.id
+            }
+        }
+        impl Eq for Key {}
+        impl Hash for Key {
+            fn hash<H: Hasher>(&self, hasher: &mut H) {
+                self.hashes.set(self.hashes.get() + 1);
+                self.id.hash(hasher);
+            }
+        }
+        let key = Key {
+            id: 1,
+            clones: Rc::new(Cell::new(0)),
+            hashes: Rc::new(Cell::new(0)),
+        };
+        let mut cache = Cache::new(1);
+        assert_eq!(cache.get_or_insert_with_ref(&key, || 10), &10);
+        assert_eq!((key.clones.get(), key.hashes.get()), (1, 1));
+        assert_eq!(cache.get_or_insert_with_ref(&key, || panic!("hit")), &10);
+        assert_eq!((key.clones.get(), key.hashes.get()), (1, 2));
+    }
+
+    #[test]
+    fn borrowed_loader_panic_does_not_evict_or_change_visited_bits() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let mut cache: Cache<String, u64> = Cache::new(2);
+        cache.insert("a".into(), 1);
+        cache.insert("b".into(), 2);
+        cache.get("a");
+        let hand = cache.deque.hand;
+        let visited: Vec<_> = cache.slab.iter().map(|(_, e)| e.is_visited()).collect();
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            cache.get_or_insert_with_ref("c", || panic!("loader"));
+        }))
+        .is_err());
+        assert_eq!(cache.deque.hand, hand);
+        assert_eq!(
+            cache
+                .slab
+                .iter()
+                .map(|(_, e)| e.is_visited())
+                .collect::<Vec<_>>(),
+            visited
+        );
+        assert_eq!(cache.entry_count(), 2);
+        assert_eq!(cache.peek("a"), Some(&1));
+        assert_eq!(cache.peek("b"), Some(&2));
+    }
+
+    #[test]
+    fn borrowed_loader_key_clone_panic_keeps_resident() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        #[derive(Hash, Eq, PartialEq)]
+        struct Key(u64);
+        impl Clone for Key {
+            fn clone(&self) -> Self {
+                panic!("key clone");
+            }
+        }
+        let mut cache = Cache::new(1);
+        cache.insert(Key(1), 1);
+        assert_eq!(cache.get_or_insert_with_ref(&Key(1), || panic!("hit")), &1);
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            cache.get_or_insert_with_ref(&Key(2), || 2);
+        }))
+        .is_err());
+        assert_eq!(cache.entry_count(), 1);
+        assert_eq!(cache.peek(&Key(1)), Some(&1));
+        assert_eq!(cache.peek(&Key(2)), None);
+    }
 
     struct DropBomb(bool);
 
@@ -951,6 +1137,83 @@ mod tests {
         assert_eq!(cache.table.len(), 1);
         assert_eq!(cache.slab.iter().count(), 1);
         assert!(cache.contains_key(&"safe"));
+    }
+
+    #[test]
+    fn invalidate_all_reuses_slab_and_free_list_buffers() {
+        let mut cache = Cache::builder()
+            .max_capacity(32)
+            .initial_capacity(32)
+            .build();
+        for key in 0..32 {
+            cache.insert(key, key);
+        }
+        for key in (0..32).step_by(2) {
+            cache.remove(&key);
+        }
+        let entries_ptr = cache.slab.entries.as_ptr();
+        let free_ptr = cache.slab.free_list.as_ptr();
+        let free_capacity = cache.slab.free_list.capacity();
+        for _ in 0..3 {
+            cache.invalidate_all();
+            assert_eq!(cache.slab.entries.as_ptr(), entries_ptr);
+            assert_eq!(cache.slab.free_list.as_ptr(), free_ptr);
+            assert_eq!(cache.slab.free_list.capacity(), free_capacity);
+            assert!(cache.slab.entries.is_empty());
+            assert!(cache.slab.free_list.is_empty());
+            assert_eq!(cache.entry_count(), 0);
+            assert_eq!(cache.table.len(), 0);
+            assert_eq!(cache.iter().next(), None);
+            for key in 0..32 {
+                cache.insert(key, key);
+            }
+            assert_eq!(cache.entry_count(), 32);
+            for key in 0..32 {
+                assert_eq!(cache.peek(&key), Some(&key));
+            }
+        }
+    }
+
+    #[test]
+    fn clearing_an_empty_cache_with_vacant_slots_allows_refill() {
+        let mut cache = Cache::new(4);
+        for key in 0..4 {
+            cache.insert(key, key);
+        }
+        for key in 0..4 {
+            cache.remove(&key);
+        }
+        cache.invalidate_all();
+        cache.invalidate_all();
+        assert_eq!(cache.iter().next(), None);
+        for key in 4..8 {
+            cache.insert(key, key);
+        }
+        cache.insert(8, 8);
+        assert_eq!(cache.entry_count(), 4);
+        assert_eq!(cache.peek(&4), None);
+        assert_eq!(cache.peek(&8), Some(&8));
+    }
+
+    #[test]
+    fn invalidate_all_key_drop_panic_leaves_cache_usable() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        #[derive(Debug, Hash, PartialEq, Eq)]
+        struct Key(bool);
+        impl Drop for Key {
+            fn drop(&mut self) {
+                assert!(!self.0, "key drop");
+            }
+        }
+        let mut cache = Cache::new(2);
+        cache.insert(Key(true), 1);
+        cache.insert(Key(false), 2);
+        assert!(catch_unwind(AssertUnwindSafe(|| cache.invalidate_all())).is_err());
+        assert_eq!(cache.entry_count(), 0);
+        assert_eq!(cache.table.len(), 0);
+        assert_eq!(cache.iter().next(), None);
+        cache.insert(Key(false), 3);
+        assert_eq!(cache.get(&Key(false)), Some(&3));
     }
 
     #[test]

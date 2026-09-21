@@ -1,0 +1,80 @@
+{
+  "started_utc": "2026-09-21T13:06:08.512179+00:00",
+  "orchestrator_commit": "b1c4b90bd5cada1c0d82f679f959fe1ed45575de",
+  "base": "4a3888649e89a0216586a36fadcdb9dc76a6efa0",
+  "harness_ref": "working-tree",
+  "script_sha256": "6ba323abe6e6e9aa166ead67a2c2c3e1442e896a2dd3dfdf52946ab1b18cc721",
+  "patches": [
+    {
+      "feature": "borrowed",
+      "before": "86d88c986c1ee1bda6d8334b0c5adc4c44d84600",
+      "after": "be8e2de2cc761f8fbd45f4a26eb7991319b3ade9"
+    },
+    {
+      "feature": "clear",
+      "before": "be8e2de2cc761f8fbd45f4a26eb7991319b3ade9",
+      "after": "78f03bbc5ac3d200805426710a781559cdce4ffc"
+    }
+  ],
+  "variant": "110",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02) (Homebrew)\nbinary: rustc\ncommit-hash: 4a4ef493e3a1488c6e321570238084b38948f6db\ncommit-date: 2026-03-02\nhost: aarch64-apple-darwin\nrelease: 1.94.0\nLLVM version: 21.1.8",
+  "platform": "macOS-15.7.3-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "settings": {
+    "MM_SAMPLES": "5",
+    "MM_MILLIS": "3"
+  },
+  "sha256": {
+    "Cargo.toml": "f9f7c315ee657219c8ecdf84b7ba62bf19260d1906275dcf2efe19217a211a46",
+    "benches/Cargo.toml": "f4471fbf343e7ce53d3c8792fea733b60b038c284555d728974b7fa87b63a909",
+    "benches/benchmark.rs": "703649356837e2fcddef4bb704c35deb5f8732b9f915d25a07fa072be1ec0928",
+    "benches/Cargo.lock": "6004b29c6e793f18c7d5cce370a8d7d7bf0dd8aa0f20d0426dfad19d85b490f6",
+    "benches/compare.rs": "df940cac1c8ec600541aa5139c3a0430644e1e9d77f6fba519ecb6ca9598903e",
+    "benches/allocations.rs": "1f446d2bd5cba9683302ad8ce96a75110ae4f5c5fd73f30ae644359e9e3619ed",
+    "src/policy.rs": "81996aadf0e8a6b9e2071e37b2cf2517bdec62b011ea964aec0333ab8ca28621",
+    "src/lib.rs": "10ae366db6e1908d46441d5cd71fb609e086a2de3e5346b2e313e3c88046a94e",
+    "src/unsync/cache.rs": "ad14d42a19263316263bb612c963844d66e2f095004c587a2f537fca9f33826f",
+    "src/unsync/iter.rs": "2482940863541ad9ea70ce35d5d7ece881d8448391d0bec19f955ee3b9fb851c",
+    "src/unsync/mod.rs": "8f5ed6c0762c6655f3720312b1c6e8a5e85e1fdf8d9298a4780485d3822b4a00",
+    "src/unsync/builder.rs": "60d93107bdbbee950b49ad2d516354bcc7ed3aa04a4649d503d648d305f8d231",
+    "src/unsync/cache/model.rs": "99f8aa530ba3574f7a7facc82ef64762c4fe424f151317d4fb7bc226a803e04e",
+    "benches/common/mod.rs": "6ea42aa6eac319d074c985af8a5f680cfb4e2358e6b8e93c4780978a10b04b04",
+    "benches/support/mod.rs": "4428e21560584b6a53f278e5f6416e972caea221bdb7f0ff525a1ecd47192f32"
+  },
+  "test_commands": [
+    [
+      "cargo",
+      "test",
+      "--lib",
+      "--all-features"
+    ],
+    [
+      "cargo",
+      "test",
+      "--release",
+      "--lib",
+      "--all-features"
+    ],
+    [
+      "cargo",
+      "test",
+      "--locked",
+      "--manifest-path",
+      "benches/Cargo.toml",
+      "--bin",
+      "compare"
+    ]
+  ],
+  "benchmark_command": [
+    "cargo",
+    "run",
+    "--release",
+    "--locked",
+    "--manifest-path",
+    "benches/Cargo.toml",
+    "--bin",
+    "compare"
+  ],
+  "exit_code": 0,
+  "finished_utc": "2026-09-21T13:06:58.745695+00:00"
+}

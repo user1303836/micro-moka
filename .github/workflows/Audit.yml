@@ -38,4 +38,5 @@ jobs:
       - name: Audit dependencies
         run: |
           cargo generate-lockfile
-          cargo audit
+          cargo audit --deny warnings
+          cargo audit --file benches/Cargo.lock --deny warnings

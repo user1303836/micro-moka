@@ -1,0 +1,162 @@
+    Updating crates.io index
+     Locking 1 package to latest compatible version
+      Adding hashbrown v0.16.1 (available: v0.17.1)
+   Compiling micro-moka v1.3.0 (/Users/user1303836/Development/micro-moka-benchmark-optimizations/target/ablation-sources/retained-factorial-111)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.66s
+     Running unittests src/lib.rs (/Users/user1303836/Development/micro-moka-benchmark-optimizations/target/ablation-build/debug/deps/micro_moka-95fd280b1de115a3)
+
+running 66 tests
+test unsync::builder::tests::configures_admission_scan_limit ... ok
+test unsync::builder::tests::build_cache ... ok
+test unsync::cache::tests::borrowed_loader_constructs_key_only_on_miss_and_hashes_once ... ok
+test unsync::cache::tests::basic_single_thread ... ok
+test unsync::cache::tests::borrowed_loader_marks_hits_and_preserves_exact_eviction ... ok
+test unsync::cache::tests::borrowed_loader_supports_unsized_keys_and_fn_once ... ok
+test unsync::cache::tests::borrowed_loader_zero_capacity_matches_owned_loader ... ok
+test unsync::cache::tests::borrowed_loader_panic_does_not_evict_or_change_visited_bits ... ok
+test unsync::cache::tests::borrowed_loader_key_clone_panic_keeps_resident ... ok
+test unsync::cache::tests::clearing_an_empty_cache_with_vacant_slots_allows_refill ... ok
+test unsync::cache::tests::custom_hasher_does_not_need_clone ... ok
+test unsync::cache::tests::eviction_triggers_when_over_capacity ... ok
+test unsync::cache::tests::contains_key_with_shared_reference ... ok
+test unsync::cache::tests::eviction_is_consistent_when_value_drop_panics ... ok
+test unsync::cache::tests::get_or_insert_with_after_invalidate ... ok
+test unsync::cache::tests::get_or_insert_with_after_remove ... ok
+test unsync::cache::tests::get_or_insert_with_basic ... ok
+test unsync::cache::tests::get_or_insert_with_closure_called_only_on_miss ... ok
+test unsync::cache::tests::get_or_insert_with_eviction_at_capacity ... ok
+test unsync::cache::tests::get_or_insert_with_existing_key_no_closure ... ok
+test unsync::cache::tests::get_or_insert_with_sets_visited_on_hit ... ok
+test unsync::cache::tests::get_or_insert_with_zero_capacity ... ok
+test unsync::cache::tests::insert_after_invalidate_on_full_cache ... ok
+test unsync::cache::tests::insert_after_remove_on_full_cache ... ok
+test unsync::cache::tests::invalidate_all ... ok
+test unsync::cache::tests::invalidate_all_preserves_allocated_capacity ... ok
+test unsync::cache::tests::invalidate_all_key_drop_panic_leaves_cache_usable ... ok
+test unsync::cache::tests::invalidate_and_remove_skip_eviction_below_capacity ... ok
+test unsync::cache::tests::invalidate_all_panic_safety ... ok
+test unsync::cache::tests::invalidate_decrements_entry_count ... ok
+test unsync::cache::tests::invalidate_entries_if ... ok
+test unsync::cache::tests::iterator_reports_exact_remaining_length ... ok
+test unsync::cache::tests::invalidate_is_consistent_when_value_drop_panics ... ok
+test unsync::cache::tests::peek_does_not_set_visited ... ok
+test unsync::cache::tests::peek_returns_none_for_missing_key ... ok
+test unsync::cache::tests::invalidate_all_reuses_slab_and_free_list_buffers ... ok
+test unsync::cache::tests::peek_returns_value ... ok
+test unsync::cache::tests::regular_insert_always_admits_after_bounded_rejection ... ok
+test unsync::cache::tests::predicate_invalidation_is_consistent_when_value_drop_panics ... ok
+test unsync::cache::tests::remove_decrements_entry_count ... ok
+test unsync::cache::tests::removing_the_saved_hand_resumes_toward_newer_entries ... ok
+test unsync::cache::tests::sieve_evicts_oldest_when_every_resident_is_unvisited ... ok
+test unsync::cache::tests::sieve_evicts_unvisited_entry ... ok
+test unsync::cache::tests::sieve_hand_advances_across_evictions ... ok
+test unsync::cache::tests::sieve_multiple_evictions_cycle ... ok
+test unsync::cache::tests::sieve_new_entry_always_admitted ... ok
+test unsync::cache::tests::sieve_visited_entries_get_second_chance ... ok
+test unsync::cache::tests::sub_capacity_inserts_skip_eviction ... ok
+test unsync::cache::tests::test_debug_format ... ok
+test unsync::cache::tests::try_insert_admits_below_capacity_and_updates_existing ... ok
+test unsync::cache::tests::try_insert_admits_when_budget_finds_unvisited_victim ... ok
+test unsync::cache::tests::try_insert_rejects_after_bounded_hot_scan ... ok
+test unsync::cache::tests::try_insert_resumes_sweep_after_rejection ... ok
+test unsync::cache::tests::try_insert_zero_budget_rejects_at_capacity ... ok
+test unsync::cache::tests::try_insert_eviction_is_consistent_when_value_drop_panics ... ok
+test unsync::cache::tests::try_insert_zero_capacity_returns_candidate ... ok
+test unsync::cache::tests::update_below_capacity_no_eviction ... ok
+test unsync::cache::tests::update_existing_key_sets_visited ... ok
+test unsync::cache::tests::zero_capacity_insert_returns_immediately ... ok
+test unsync::iter::tests::count_and_size_hint_follow_partial_sparse_consumption ... ok
+test unsync::cache::tests::warmup_to_full_transition ... ok
+test unsync::iter::tests::empty_iterator_is_fused_and_counts_zero ... ok
+test unsync::iter::tests::partial_folding_and_short_circuiting_preserve_remaining_items ... ok
+test unsync::tests::packed_slab_entry_uses_value_niche ... ok
+test unsync::cache::model::iteration_across_sparse_dense_clear_and_refill_transitions ... ok
+test unsync::cache::model::differential_sieve_with_collisions_and_invariants ... ok
+
+test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+   Compiling micro-moka v1.3.0 (/Users/user1303836/Development/micro-moka-benchmark-optimizations/target/ablation-sources/retained-factorial-111)
+    Finished `release` profile [optimized] target(s) in 6.35s
+     Running unittests src/lib.rs (/Users/user1303836/Development/micro-moka-benchmark-optimizations/target/ablation-build/release/deps/micro_moka-e18b069d30c87411)
+
+running 66 tests
+test unsync::builder::tests::configures_admission_scan_limit ... ok
+test unsync::builder::tests::build_cache ... ok
+test unsync::cache::tests::borrowed_loader_constructs_key_only_on_miss_and_hashes_once ... ok
+test unsync::cache::tests::borrowed_loader_supports_unsized_keys_and_fn_once ... ok
+test unsync::cache::tests::borrowed_loader_marks_hits_and_preserves_exact_eviction ... ok
+test unsync::cache::tests::basic_single_thread ... ok
+test unsync::cache::tests::borrowed_loader_zero_capacity_matches_owned_loader ... ok
+test unsync::cache::tests::clearing_an_empty_cache_with_vacant_slots_allows_refill ... ok
+test unsync::cache::tests::borrowed_loader_panic_does_not_evict_or_change_visited_bits ... ok
+test unsync::cache::tests::borrowed_loader_key_clone_panic_keeps_resident ... ok
+test unsync::cache::model::iteration_across_sparse_dense_clear_and_refill_transitions ... ok
+test unsync::cache::tests::contains_key_with_shared_reference ... ok
+test unsync::cache::tests::custom_hasher_does_not_need_clone ... ok
+test unsync::cache::tests::eviction_triggers_when_over_capacity ... ok
+test unsync::cache::tests::eviction_is_consistent_when_value_drop_panics ... ok
+test unsync::cache::tests::get_or_insert_with_after_invalidate ... ok
+test unsync::cache::tests::get_or_insert_with_after_remove ... ok
+test unsync::cache::tests::get_or_insert_with_basic ... ok
+test unsync::cache::tests::get_or_insert_with_closure_called_only_on_miss ... ok
+test unsync::cache::tests::get_or_insert_with_eviction_at_capacity ... ok
+test unsync::cache::tests::get_or_insert_with_existing_key_no_closure ... ok
+test unsync::cache::tests::get_or_insert_with_sets_visited_on_hit ... ok
+test unsync::cache::tests::get_or_insert_with_zero_capacity ... ok
+test unsync::cache::tests::insert_after_invalidate_on_full_cache ... ok
+test unsync::cache::tests::insert_after_remove_on_full_cache ... ok
+test unsync::cache::tests::invalidate_all ... ok
+test unsync::cache::tests::invalidate_all_key_drop_panic_leaves_cache_usable ... ok
+test unsync::cache::tests::invalidate_all_preserves_allocated_capacity ... ok
+test unsync::cache::tests::invalidate_all_panic_safety ... ok
+test unsync::cache::tests::invalidate_and_remove_skip_eviction_below_capacity ... ok
+test unsync::cache::tests::invalidate_all_reuses_slab_and_free_list_buffers ... ok
+test unsync::cache::tests::invalidate_decrements_entry_count ... ok
+test unsync::cache::tests::invalidate_entries_if ... ok
+test unsync::cache::tests::invalidate_is_consistent_when_value_drop_panics ... ok
+test unsync::cache::tests::iterator_reports_exact_remaining_length ... ok
+test unsync::cache::tests::peek_does_not_set_visited ... ok
+test unsync::cache::tests::peek_returns_none_for_missing_key ... ok
+test unsync::cache::tests::peek_returns_value ... ok
+test unsync::cache::tests::predicate_invalidation_is_consistent_when_value_drop_panics ... ok
+test unsync::cache::tests::regular_insert_always_admits_after_bounded_rejection ... ok
+test unsync::cache::tests::remove_decrements_entry_count ... ok
+test unsync::cache::tests::removing_the_saved_hand_resumes_toward_newer_entries ... ok
+test unsync::cache::tests::sieve_evicts_oldest_when_every_resident_is_unvisited ... ok
+test unsync::cache::tests::sieve_evicts_unvisited_entry ... ok
+test unsync::cache::tests::sieve_hand_advances_across_evictions ... ok
+test unsync::cache::tests::sieve_multiple_evictions_cycle ... ok
+test unsync::cache::tests::sieve_new_entry_always_admitted ... ok
+test unsync::cache::tests::sieve_visited_entries_get_second_chance ... ok
+test unsync::cache::tests::sub_capacity_inserts_skip_eviction ... ok
+test unsync::cache::tests::test_debug_format ... ok
+test unsync::cache::tests::try_insert_admits_below_capacity_and_updates_existing ... ok
+test unsync::cache::tests::try_insert_admits_when_budget_finds_unvisited_victim ... ok
+test unsync::cache::tests::try_insert_rejects_after_bounded_hot_scan ... ok
+test unsync::cache::tests::try_insert_eviction_is_consistent_when_value_drop_panics ... ok
+test unsync::cache::tests::try_insert_resumes_sweep_after_rejection ... ok
+test unsync::cache::tests::try_insert_zero_budget_rejects_at_capacity ... ok
+test unsync::cache::tests::try_insert_zero_capacity_returns_candidate ... ok
+test unsync::cache::tests::update_below_capacity_no_eviction ... ok
+test unsync::cache::tests::update_existing_key_sets_visited ... ok
+test unsync::cache::tests::warmup_to_full_transition ... ok
+test unsync::cache::tests::zero_capacity_insert_returns_immediately ... ok
+test unsync::iter::tests::count_and_size_hint_follow_partial_sparse_consumption ... ok
+test unsync::iter::tests::empty_iterator_is_fused_and_counts_zero ... ok
+test unsync::iter::tests::partial_folding_and_short_circuiting_preserve_remaining_items ... ok
+test unsync::tests::packed_slab_entry_uses_value_niche ... ok
+test unsync::cache::model::differential_sieve_with_collisions_and_invariants ... ok
+
+test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+   Compiling micro-moka v1.3.0 (/Users/user1303836/Development/micro-moka-benchmark-optimizations/target/ablation-sources/retained-factorial-111)
+   Compiling micro-moka-benchmarks v0.0.0 (/Users/user1303836/Development/micro-moka-benchmark-optimizations/target/ablation-sources/retained-factorial-111/benches)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running unittests compare.rs (/Users/user1303836/Development/micro-moka-benchmark-optimizations/target/ablation-build/debug/deps/compare-c89771e2660475b7)
+
+running 2 tests
+test support::tests::adapters_have_equivalent_observable_operations ... ok
+test support::tests::mixed_trace_matches_the_published_baseline_at_equal_work ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+

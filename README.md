@@ -115,6 +115,21 @@ more aggressively and rejects more candidates. Rejection is observable through
 the returned `Result`, so applications can count, retry, or bypass the cache
 without enabling internal statistics.
 
+### Borrowed-key Loading
+
+Avoid constructing a `String` on cache hits when the lookup key is a `&str`:
+
+```rust
+use micro_moka::unsync::Cache;
+
+let mut cache: Cache<String, usize> = Cache::new(100);
+assert_eq!(cache.get_or_insert_with_ref("key", || 42), &42);
+assert_eq!(cache.get_or_insert_with_ref("key", || unreachable!()), &42);
+```
+
+Only a miss calls the loader and creates the owned key. Existing
+`get_or_insert_with` remains useful when the caller already owns its key.
+
 ### Custom Hashers
 
 The default hasher is `RandomState`, the same HashDoS-resistant default used by
@@ -186,6 +201,10 @@ cargo +nightly miri test --lib --all-features
 # Benchmarks require Rust 1.85 and have a separate, locked dependency graph.
 cargo run --release --locked --manifest-path benches/Cargo.toml
 ```
+
+The [paired comparison report](docs/benchmark-results.md) covers borrowed loading,
+clearing, and iteration across matched hashers and capacities, including regressions
+and rejected experiments. Run the current comparison with `python3 benches/run.py my-run`.
 
 ## Releases
 

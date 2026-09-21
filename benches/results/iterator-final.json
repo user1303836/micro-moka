@@ -1,0 +1,32 @@
+{
+  "started_utc": "2026-09-21T12:39:52.662441+00:00",
+  "commit": "78f03bbc5ac3d200805426710a781559cdce4ffc",
+  "status": "M benches/compare.rs\n M benches/support/mod.rs\n M src/unsync/cache.rs\n M src/unsync/iter.rs\n?? benches/results/iterator-chunk-fold.csv\n?? benches/results/iterator-chunk-fold.json\n?? benches/results/iterator-chunk-fold.md\n?? benches/results/iterator-dense-search.csv\n?? benches/results/iterator-dense-search.json\n?? benches/results/iterator-dense-search.md\n?? benches/results/iterator-density-half.csv\n?? benches/results/iterator-density-half.json\n?? benches/results/iterator-density-half.md\n?? benches/results/iterator-dispatch.csv\n?? benches/results/iterator-dispatch.json\n?? benches/results/iterator-dispatch.md\n?? benches/results/iterator-early-stop.csv\n?? benches/results/iterator-early-stop.json\n?? benches/results/iterator-early-stop.md\n?? benches/results/iterator-fold-slots.csv\n?? benches/results/iterator-fold-slots.json\n?? benches/results/iterator-fold-slots.md\n?? benches/results/iterator-hybrid.csv\n?? benches/results/iterator-hybrid.json\n?? benches/results/iterator-hybrid.md\n?? benches/results/iterator-inline.csv\n?? benches/results/iterator-inline.json\n?? benches/results/iterator-inline.md\n?? benches/results/iterator-sparse-threshold.csv\n?? benches/results/iterator-sparse-threshold.json\n?? benches/results/iterator-sparse-threshold.md\n?? src/unsync/cache/",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02) (Homebrew)\nbinary: rustc\ncommit-hash: 4a4ef493e3a1488c6e321570238084b38948f6db\ncommit-date: 2026-03-02\nhost: aarch64-apple-darwin\nrelease: 1.94.0\nLLVM version: 21.1.8",
+  "platform": "macOS-15.7.3-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "settings": {
+    "MM_FILTER": "iter"
+  },
+  "sha256": {
+    "src/unsync/cache.rs": "0f6003036e7ead822e8a8fdf6a72c988095bc7ef2ecb5994d6028d005907a8b7",
+    "src/unsync/iter.rs": "4bf91609d02142994ed86a940c97c6abb1012a03eae08dcb32a6a9f9081fea84",
+    "src/unsync/mod.rs": "8f5ed6c0762c6655f3720312b1c6e8a5e85e1fdf8d9298a4780485d3822b4a00",
+    "benches/compare.rs": "eb04c7bdfbb9f271588b66ca59e5cd5eeb2ffe834067439610ef660414730a1a",
+    "benches/support/mod.rs": "4428e21560584b6a53f278e5f6416e972caea221bdb7f0ff525a1ecd47192f32",
+    "benches/Cargo.lock": "6004b29c6e793f18c7d5cce370a8d7d7bf0dd8aa0f20d0426dfad19d85b490f6",
+    "benches/Cargo.toml": "f4471fbf343e7ce53d3c8792fea733b60b038c284555d728974b7fa87b63a909"
+  },
+  "command": [
+    "cargo",
+    "run",
+    "--release",
+    "--locked",
+    "--manifest-path",
+    "benches/Cargo.toml",
+    "--bin",
+    "compare"
+  ],
+  "exit_code": 0,
+  "finished_utc": "2026-09-21T12:40:43.555053+00:00"
+}

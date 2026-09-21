@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-09-21
+
+### Added
+
+- Added `Cache::get_or_insert_with_ref` to load using borrowed keys without constructing owned keys on hits.
+- Added matched-hasher comparisons with released Micro Moka, quick_cache, lru, and hashlink across key sizes, capacities, loading, clearing, and iteration, plus allocation regression probes.
+- Added borrowed-loader panic, visitation, hash-count, clone-count, and unsized-key regression tests.
+
+### Changed
+
+- Refreshed the isolated benchmark dependency lockfile and audit both dependency graphs with warnings denied.
+- Reused hash table, slab, and free-list allocations across `invalidate_all`, with a cheap empty-cache path and panic-safe cleanup.
+- Made `Iter::count` constant-time, including after partial consumption. Kept the existing traversal and iterator representation after broader iteration prototypes regressed other workloads.
+- Added deterministic model/invariant tests spanning exact and budgeted admission, collisions, loading, invalidation, and iterator density transitions.
+
 ## [1.2.0] - 2026-07-20
 
 ### Added

@@ -1,0 +1,32 @@
+{
+  "started_utc": "2026-09-21T12:18:19.432920+00:00",
+  "commit": "78f03bbc5ac3d200805426710a781559cdce4ffc",
+  "status": "M src/unsync/cache.rs\n M src/unsync/iter.rs\n?? benches/results/iterator-early-stop.csv\n?? benches/results/iterator-early-stop.json\n?? benches/results/iterator-early-stop.md\n?? benches/results/iterator-hybrid.csv\n?? benches/results/iterator-hybrid.json\n?? benches/results/iterator-hybrid.md",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02) (Homebrew)\nbinary: rustc\ncommit-hash: 4a4ef493e3a1488c6e321570238084b38948f6db\ncommit-date: 2026-03-02\nhost: aarch64-apple-darwin\nrelease: 1.94.0\nLLVM version: 21.1.8",
+  "platform": "macOS-15.7.3-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "settings": {
+    "MM_FILTER": "iter-dense"
+  },
+  "sha256": {
+    "src/unsync/cache.rs": "d50415b457d9ed2ce15352b9a1e720b321f32a9d615fb27ee0b1233cc15ab66d",
+    "src/unsync/iter.rs": "ef20e88c514e4dcc1defa5eed61cc45b4822813111790e3cf7cc0b329c31d259",
+    "src/unsync/mod.rs": "8f5ed6c0762c6655f3720312b1c6e8a5e85e1fdf8d9298a4780485d3822b4a00",
+    "benches/compare.rs": "dae51f115e91c59859d93f5a05279fd9d59ec469cc77d1a6ab8b5bfad9f0b64b",
+    "benches/support/mod.rs": "a0c23482a338e36725b3c2de98918f051abdb0d9eefcab43059ba9f271596f13",
+    "benches/Cargo.lock": "6004b29c6e793f18c7d5cce370a8d7d7bf0dd8aa0f20d0426dfad19d85b490f6",
+    "benches/Cargo.toml": "f4471fbf343e7ce53d3c8792fea733b60b038c284555d728974b7fa87b63a909"
+  },
+  "command": [
+    "cargo",
+    "run",
+    "--release",
+    "--locked",
+    "--manifest-path",
+    "benches/Cargo.toml",
+    "--bin",
+    "compare"
+  ],
+  "exit_code": 0,
+  "finished_utc": "2026-09-21T12:18:30.581712+00:00"
+}

@@ -5,22 +5,33 @@ edition = "2021"
 rust-version = "1.85"
 publish = false
 autobins = false
+default-run = "benchmark"
 
 [[bin]]
 name = "benchmark"
 path = "benchmark.rs"
 
+[[bin]]
+name = "compare"
+path = "compare.rs"
+
+[[bin]]
+name = "allocations"
+path = "allocations.rs"
+
 [dependencies]
 micro-moka = { path = ".." }
+baseline = { package = "micro-moka", version = "=1.2.0" }
 quick_cache = "=0.7.0"
-lru = "=0.18.1"
-hashlink = "=0.12.1"
+lru = "=0.18.4"
+hashlink = "=0.12.2"
 mini-moka = "=0.10.3"
 sieve-cache = "=1.1.6"
 senba = "=0.2.0"
-rand = "=0.10.2"
+rand = "=0.10.3"
 rand_distr = "=0.6.0"
 ahash = "=0.8.12"
+stats_alloc = "=0.1.10"
 
 [profile.release]
 lto = true
