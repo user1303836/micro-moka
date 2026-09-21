@@ -2,6 +2,14 @@
 
 This work targets broader measured wins against common single-threaded Rust caches without changing SIEVE semantics, HashDoS-resistant defaults, Rust 1.76 support, or the safe-Rust production dependency footprint.
 
+## Retained implementation
+
+- Add borrowed-key loading without hit-path key construction.
+- Preserve table/slab/free-list storage on clear, including panic-safe cleanup.
+- Make `Iter::count` constant-time. **Keep the original iterator layout and traversal.**
+
+The more ambitious sparse traversal and folding prototypes below are **rejected**, not part of the final implementation. A second x86-64 host exposed up to 74% partial-iteration regressions in chunked folding; even smaller traversal changes destabilized other generated loops. The retained count-only change showed 159 ties, 19 wins and two small losses (5.5% and 7.2%) across 180 ARM iterator cases, without the large repeatable losses. Empty/trailing-hole traversal improvements are deferred, rather than purchased by regressing other iteration patterns.
+
 ## Comparison contract
 
 - Baseline: released Micro Moka 1.2.0, independently of the candidate path dependency.
@@ -50,11 +58,11 @@ The first buffer-reuse prototype (`borrowed-clear`) eliminated allocations but s
 
 Allocation tests assert zero new allocations during clear and exactly one deallocation per owned String key (no backing-buffer frees). New tests cover reuse of slab/free-list pointers through holes/refills, key-destructor panic, and repeated clearing after the last resident was removed. The existing value-destructor panic tests remain passing. The intermediate experiment is retained to show why simply swapping in a buffer-preserving implementation was not the final choice.
 
-## Iterator experiments and remaining trade-offs
+## Rejected iterator experiments
 
-An unconditional `remaining == 0` check in `next` caused 30–40% dense-iteration regressions (`iterator-early-stop`), so that version was rejected. Linked iteration at 50% occupancy also lost badly to contiguous scanning (`iterator-density-half`). The current checkpoint uses links only at <=1/32 occupancy, with no new per-entry storage, and dispatches folds once rather than once per resident. Empty iteration and `count` are constant-time. Iteration order remains deliberately unspecified.
+An unconditional `remaining == 0` check in `next` caused 30–40% dense-iteration regressions (`iterator-early-stop`), so that version was rejected. Linked iteration at 50% occupancy also lost badly to contiguous scanning (`iterator-density-half`). The intermediate checkpoint used links only at <=1/32 occupancy, with no new per-entry storage, and dispatches folds once rather than once per resident. Empty iteration and `count` are constant-time. Iteration order remains deliberately unspecified.
 
-The matrix now includes explicit `for` loops and four intermediate occupancies (approximately 1%, 6.25%, 25%, 50%), **342 configurations total**, preventing a one-resident-only optimization from hiding moderate-density costs. Direct slot folding and chunked folding were measured separately; the current 64-slot chunk checkpoint retains the broader improvements but is not a universal win. In `iterator-final`, 137 of 180 iterator medians improve over v1.2 by >5%, 33 are within 5%, and **10 regress**. Regressions are at capacity 16,384, principally partially vacant slabs, up to about **17%**. Against the fastest peer: 61 wins, 70 ties, 49 losses. These remaining trade-offs must stay visible in the final comparison; this is not a zero-regression claim.
+The matrix now includes explicit `for` loops and four intermediate occupancies (approximately 1%, 6.25%, 25%, 50%), **342 configurations total**, preventing a one-resident-only optimization from hiding moderate-density costs. Direct slot folding and chunked folding were measured separately; the intermediate 64-slot chunk checkpoint showed broader improvements on ARM but was not portable enough to retain. In `iterator-final`, 137 of 180 iterator medians improve over v1.2 by >5%, 33 are within 5%, and **10 regress**. Regressions are at capacity 16,384, principally partially vacant slabs, up to about **17%**. Against the fastest peer: 61 wins, 70 ties, 49 losses. These remaining trade-offs must stay visible in the final comparison; this is not a zero-regression claim.
 
 The exploratory CSVs record tested outcomes, not statistically established portable tuning constants. Full-factorial source-replayed comparisons are below; final reruns follow. Model tests independently check 1,050,000 mixed operations (reduced under Miri), along with table/slab/free-list/deque/hand/visited invariants and dense/sparse/clear/refill transitions.
 
@@ -94,4 +102,10 @@ The mixed case means **95% lookups**, not a guaranteed 95% hit rate. Its residen
 
 The second factorial run (`steady-factorial-*`) and two combined repeats (`combined-final`, `combined-repeat`) retained large mixed-case fluctuations despite 64 warm-up batches: one unchanged mixed path differed by 46% in a repeat. Warm-up alone does not guarantee a stationary resident set for this read-without-refill trace. An adaptive time window lets faster implementations process different trace prefixes, so these mixed-case rows do **not** establish like-for-like throughput regressions.
 
-The corrected harness measures exactly **256 batches of 8,192 operations** for the mixed case, after the same warm-up/pilot work for every library. Other cases retain adaptive timing. The new test compares candidate and published-baseline resident contents after each equal-length mixed batch. In the initial corrected diagnostic (`mixed-fixed-operations`), all 18 mixed-case comparisons are within 5% of baseline. Earlier raw results are retained rather than silently replaced; final headline results use the corrected harness.
+The corrected harness measures exactly **256 batches of 8,192 operations** for the mixed case, after the same warm-up/pilot work for every library. Other cases retain adaptive timing. The new test compares candidate and published-baseline resident contents after each equal-length mixed batch. In the initial corrected diagnostic (`mixed-fixed-operations`), all 18 mixed-case comparisons are within 5% of baseline. Earlier raw results are retained rather than silently replaced; final headline results use the corrected harness and retained count-only iterator, not the rejected sparse/chunked prototypes.
+
+### Additional portability evidence
+
+`linux-35605203376` is the equal-work run that rejected chunked folding: 34 cases regressed against 1.2, with partial-iteration losses up to 74%. `iterator-inlined-original-fold`, `iterator-conservative`, and `iterator-empty-prefix` also exposed repeatable partial-iteration costs. `iterator-count-only` preserves the original traversal and avoids those large losses. The raw unsuccessful experiments remain checked in; generated-evidence attributes keep them collapsed in GitHub's code diff.
+
+`benches/footprint.py` measures three clean, offline, alternating-order builds of a small cache-using application, with source/manifests/checksums recorded. The intermediate implementation had the same 336,016-byte stripped executable size as baseline and approximately 2.08-second median clean builds. This is a representative application check, not a universal size or build-time guarantee; the retained implementation is remeasured separately.

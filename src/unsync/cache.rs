@@ -201,13 +201,8 @@ impl<K, V, S> Cache<K, V, S> {
     ///
     /// assert!(iter.next().is_none());
     /// ```
-    #[inline]
     pub fn iter(&self) -> Iter<'_, K, V> {
-        Iter::new(
-            &self.slab.entries,
-            self.entry_count as usize,
-            self.deque.head,
-        )
+        Iter::new(&self.slab.entries, self.entry_count as usize)
     }
 }
 
