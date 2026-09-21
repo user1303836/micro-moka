@@ -22,7 +22,7 @@ This work targets broader measured wins against common single-threaded Rust cach
 
 ## Harness and initial control
 
-`benches/compare.rs` runs 252 cases (three key shapes, two matched hashers, three capacities, fourteen operations), with nine rotating-order samples per library and a minimum five-millisecond measurement per sample. The initial A/A control, before any production optimization, has 240/252 candidate/baseline medians within 5%; eight apparent losses and four apparent wins demonstrate the noise/code-layout floor. The 5% band is descriptive, not a significance test. At this stage Micro Moka is more than 5% faster than every measured peer in 42/252 cases; this is a fixed synthetic matrix, not a representative market-share metric.
+The initial `benches/compare.rs` matrix ran 252 cases (three key shapes, two matched hashers, three capacities, fourteen operations), with nine rotating-order samples per library and a minimum five-millisecond measurement per sample. The initial A/A control, before any production optimization, has 240/252 candidate/baseline medians within 5%; eight apparent losses and four apparent wins demonstrate the noise/code-layout floor. The 5% band is descriptive, not a significance test. At this stage Micro Moka is more than 5% faster than every measured peer in 42/252 cases; this is a fixed synthetic matrix, not a representative market-share metric.
 
 Raw control samples and allocation counts are in `benches/results/before.csv` and `allocations-before.csv`. Machine: Apple M4, aarch64 macOS, Rust 1.94.0, release LTO and one codegen unit. Baseline and candidate both have preallocated capacity. Competitors use the same hasher type/state; LRU policies naturally differ on churn/mixed workloads. Iteration measures a commutative value sum, not traversal order. Clear/refill measures a whole clear plus refill cycle (ns/cycle), whereas clear-empty measures repeated clearing of an already empty, previously populated cache. No allocator instrumentation is active in the timing executable.
 
@@ -36,7 +36,9 @@ cargo test --locked --manifest-path benches/Cargo.toml
 
 `run.py` stores raw CSV, summary Markdown, source hashes, lockfile hash, revision, environment settings, and compiler/platform details. All results use separately compiled published Micro Moka 1.2.0 as the baseline. `hashlink` has no native loader in this harness; its best available get/insert composition is labeled as such here. The baseline/current adapters initially both use owned loading; subsequent implementation commits switch only the candidate adapter to the new borrowed API.
 
-Both dependency graphs now pass `cargo audit --deny warnings`. The benchmark lock was refreshed to current releases, including LRU 0.18.4, hashlink 0.12.2, rand 0.10.3, and non-yanked chacha20 0.10.2. Adapter equivalence tests and allocation probes run in CI. ## Borrowed loading in isolation
+Both dependency graphs now pass `cargo audit --deny warnings`. The benchmark lock was refreshed to current releases, including LRU 0.18.4, hashlink 0.12.2, rand 0.10.3, and non-yanked chacha20 0.10.2. Adapter equivalence tests and allocation probes run in CI.
+
+## Borrowed loading in isolation
 
 `borrowed-only.csv` changes only the candidate loader API; clearing and iteration are unchanged. Across all twelve String loader-hit configurations, candidate median time is 0.379–0.873 times v1.2.0 (about 13–62% lower). Integer-key controls remain essentially unchanged. Loader-cycle cases do not show a >5% regression. Candidate allocation counts for 10,000 String hits are zero, versus 10,000 in v1.2.0; quick_cache, lru, and hashlink also avoid hit allocations.
 
@@ -54,4 +56,36 @@ An unconditional `remaining == 0` check in `next` caused 30–40% dense-iteratio
 
 The matrix now includes explicit `for` loops and four intermediate occupancies (approximately 1%, 6.25%, 25%, 50%), **342 configurations total**, preventing a one-resident-only optimization from hiding moderate-density costs. Direct slot folding and chunked folding were measured separately; the current 64-slot chunk checkpoint retains the broader improvements but is not a universal win. In `iterator-final`, 137 of 180 iterator medians improve over v1.2 by >5%, 33 are within 5%, and **10 regress**. Regressions are at capacity 16,384, principally partially vacant slabs, up to about **17%**. Against the fastest peer: 61 wins, 70 ties, 49 losses. These remaining trade-offs must stay visible in the final comparison; this is not a zero-regression claim.
 
-The exploratory CSVs record tested outcomes, not statistically established portable tuning constants. Full-factorial source-replayed comparisons and final reruns follow. Model tests independently check 1,050,000 mixed operations (reduced under Miri), along with table/slab/free-list/deque/hand/visited invariants and dense/sparse/clear/refill transitions.
+The exploratory CSVs record tested outcomes, not statistically established portable tuning constants. Full-factorial source-replayed comparisons are below; final reruns follow. Model tests independently check 1,050,000 mixed operations (reduced under Miri), along with table/slab/free-list/deque/hand/visited invariants and dense/sparse/clear/refill transitions.
+
+## Full-factorial comparison
+
+`benches/ablate.py` reconstructs v1.2 source and applies each subset of the three production patches in isolated, ignored build directories. Every variant passes debug/release model tests and adapter tests before measurement. The candidate package keeps version 1.3 so that the independent published 1.2 baseline can coexist. Borrowed-off variants use the owned loader in both the adapter and reference-model test. No production `cfg` switches or runtime benchmarking branches are introduced.
+
+Initial factorial run: five rotating samples, >=3 ms/sample, 342 cases. Columns count medians >5% faster / within 5% / >5% slower, not statistically significant wins:
+
+| Borrowed | Clear | Iterator | vs published 1.2 W/T/L | vs fastest peer W/T/L |
+|---|---|---|---|---|
+| off | off | off | 6 / 333 / 3 | 68 / 55 / 219 |
+| on | off | off | 20 / 314 / 8 | 63 / 63 / 216 |
+| off | on | off | 26 / 312 / 4 | 76 / 64 / 202 |
+| off | off | on | 137 / 191 / 14 | 96 / 123 / 123 |
+| on | on | off | 42 / 298 / 2 | 92 / 54 / 196 |
+| on | off | on | 155 / 162 / 25 | 96 / 126 / 120 |
+| off | on | on | 163 / 167 / 12 | 117 / 124 / 101 |
+| on | on | on | 171 / 158 / 13 | 114 / 116 / 112 |
+
+On the **original 252-case subset**, fastest-peer wins increase from 42 to 86 (103 additional cases within 5%), so the improvement is not just a consequence of adding iterator cases. On the expanded matrix, the combined checkpoint wins strictly against quick_cache in 222/342, lru in 204/342, and hashlink in 184/342; it does **not** beat the fastest of all three in most cases. The no-change control has nine >5% deviations, illustrating that minor results can move with code layout, random hash seeds, and machine load.
+
+All raw samples, replay identities, per-variant source hashes and test logs are in `benches/results/factorial-*`. Reproduce with:
+
+```sh
+python3 benches/ablate.py unique-factorial-name --harness-ref bade8b4
+# Omit --harness-ref to use the current, hardened harness.
+# Bits are borrowed, clear, iterator; runs refuse to overwrite prior evidence.
+python3 benches/ablate.py independent --variants 100,010,001,111
+```
+
+### Benchmark hardening after the factorial run
+
+The mixed case means **95% lookups**, not a guaranteed 95% hit rate. Its resident set changes during initial churn, so final reruns add 64 unmeasured batches before timing rather than comparing short transient phases. Iteration setups now validate both their expected count and checksums before timing. These changes apply equally to every library. `run.py` also saves tracked source diffs for uncommitted experiments, and the new CI evidence job compares all libraries on x86-64 Linux. CI-host timings are paired exploratory evidence, not controlled hardware-performance guarantees.

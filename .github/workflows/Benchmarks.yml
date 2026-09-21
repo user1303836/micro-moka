@@ -1,0 +1,39 @@
+name: Comparative benchmark evidence
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'benches/*.rs'
+      - 'benches/*.py'
+      - 'benches/support/**'
+      - 'benches/Cargo.*'
+      - '.github/workflows/Benchmarks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.94.0'
+      - name: Record paired x86-64 comparison
+        env:
+          MM_SAMPLES: '9'
+          MM_MILLIS: '5'
+        run: |
+          python3 benches/run.py linux-${{ github.run_id }}
+          lscpu > benches/results/linux-${{ github.run_id }}-hardware.txt
+          cat benches/results/linux-${{ github.run_id }}.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload raw measurements and provenance
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: comparison-${{ github.run_id }}
+          path: benches/results/linux-${{ github.run_id }}*
+          retention-days: 30

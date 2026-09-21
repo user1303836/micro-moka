@@ -49,6 +49,21 @@ fn main() {
     };
     assert!(settings.samples > 0 && !settings.duration.is_zero());
     assert!(settings.capacities.iter().all(|&c| c > 0));
+    assert!(
+        CASES.iter().any(|case| case.contains(&settings.filter)),
+        "filter matches no workload"
+    );
+    assert!(
+        settings.libraries.split(',').all(|name| [
+            "micro",
+            "baseline",
+            "quick_cache",
+            "lru",
+            "hashlink"
+        ]
+        .contains(&name)),
+        "unknown library"
+    );
     println!("key,hasher,capacity,operation,library,sample,ns_per_op");
     run::<u64, _>("u64", 0, "sip", RandomState::new(), &settings);
     run::<u64, _>(
@@ -137,6 +152,18 @@ fn timed(mut batch: impl FnMut(), operations: usize, duration: Duration) -> f64 
     }
 }
 
+#[inline]
+fn mixed_batch<K: Key, S: BuildHasher, C: Cache<K, S>>(c: &mut C, keys: &[K], indices: &[usize]) {
+    let capacity = keys.len() / 2;
+    for (op, &i) in indices.iter().enumerate() {
+        if op % 20 == 0 {
+            c.insert(black_box(&keys[capacity + i]).clone(), 7);
+        } else {
+            black_box(c.get(black_box(&keys[i])));
+        }
+    }
+}
+
 fn bench<K: Key, S: BuildHasher, C: Cache<K, S>>(
     capacity: usize,
     keys: &[K],
@@ -150,6 +177,8 @@ fn bench<K: Key, S: BuildHasher, C: Cache<K, S>>(
         c.insert(key.clone(), i as u64);
     }
     assert_eq!(c.count(), capacity);
+    let mut expected_count = capacity;
+    let mut expected_sum = (0..capacity as u64).sum::<u64>();
     if case.starts_with("iter-") && !case.starts_with("iter-dense") {
         for (i, key) in keys[..capacity].iter().enumerate() {
             let keep = match case {
@@ -163,7 +192,19 @@ fn bench<K: Key, S: BuildHasher, C: Cache<K, S>>(
             };
             if !keep {
                 c.remove(key);
+                expected_count -= 1;
+                expected_sum -= i as u64;
             }
+        }
+    }
+    if case.starts_with("iter-") {
+        assert_eq!(c.count(), expected_count);
+        assert_eq!(c.sum(), expected_sum);
+        assert_eq!(c.sum_for(), expected_sum);
+    }
+    if case == "mixed-95" {
+        for _ in 0..64 {
+            mixed_batch::<K, S, C>(&mut c, keys, indices);
         }
     }
     if case == "clear-empty" {
@@ -207,15 +248,7 @@ fn bench<K: Key, S: BuildHasher, C: Cache<K, S>>(
             duration,
         ),
         "mixed-95" => timed(
-            || {
-                for (op, &i) in indices.iter().enumerate() {
-                    if op % 20 == 0 {
-                        c.insert(black_box(&keys[capacity + i]).clone(), 7);
-                    } else {
-                        black_box(c.get(black_box(&keys[i])));
-                    }
-                }
-            },
+            || mixed_batch::<K, S, C>(&mut c, keys, indices),
             indices.len(),
             duration,
         ),

@@ -28,6 +28,8 @@ def main():
     if output.exists():
         raise SystemExit(f"Refusing to overwrite {output}")
     output.parent.mkdir(exist_ok=True)
+    source_paths = ["src", "Cargo.toml", "benches/compare.rs", "benches/support/mod.rs", "benches/Cargo.toml", "benches/Cargo.lock"]
+    output.with_suffix(".patch").write_bytes(subprocess.check_output(["git", "diff", "HEAD", "--", *source_paths], cwd=ROOT))
     metadata = {
         "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "commit": command("git", "rev-parse", "HEAD"),
@@ -36,7 +38,7 @@ def main():
         "platform": platform.platform(),
         "machine": platform.machine(),
         "settings": {k: v for k, v in os.environ.items() if k.startswith("MM_")},
-        "sha256": {p: digest(p) for p in ["src/unsync/cache.rs", "src/unsync/iter.rs", "src/unsync/mod.rs", "benches/compare.rs", "benches/support/mod.rs", "benches/Cargo.lock", "benches/Cargo.toml"]},
+        "sha256": {p: digest(p) for p in ["src/unsync/cache.rs", "src/unsync/iter.rs", "src/unsync/mod.rs", "benches/compare.rs", "benches/support/mod.rs", "benches/Cargo.lock", "benches/Cargo.toml", "Cargo.toml", "benches/run.py", "benches/summarize.py"]},
     }
     invocation = ["cargo", "run", "--release", "--locked", "--manifest-path", "benches/Cargo.toml", "--bin", "compare"]
     metadata["command"] = invocation
