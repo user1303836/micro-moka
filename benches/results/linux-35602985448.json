@@ -1,0 +1,36 @@
+{
+  "started_utc": "2026-09-21T13:01:49.451005+00:00",
+  "commit": "6ef921213fad7ec101d3b0c6af53cf13914ff9a9",
+  "status": "?? benches/results/linux-35602985448.patch",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)\nbinary: rustc\ncommit-hash: 4a4ef493e3a1488c6e321570238084b38948f6db\ncommit-date: 2026-03-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.94.0\nLLVM version: 21.1.8",
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "settings": {
+    "MM_SAMPLES": "9",
+    "MM_MILLIS": "5"
+  },
+  "sha256": {
+    "src/unsync/cache.rs": "0f6003036e7ead822e8a8fdf6a72c988095bc7ef2ecb5994d6028d005907a8b7",
+    "src/unsync/iter.rs": "f14f68068f5db83a81a2a8f577c35cf5e06db0b10e3c06aff65febae87e07d51",
+    "src/unsync/mod.rs": "8f5ed6c0762c6655f3720312b1c6e8a5e85e1fdf8d9298a4780485d3822b4a00",
+    "benches/compare.rs": "df940cac1c8ec600541aa5139c3a0430644e1e9d77f6fba519ecb6ca9598903e",
+    "benches/support/mod.rs": "4428e21560584b6a53f278e5f6416e972caea221bdb7f0ff525a1ecd47192f32",
+    "benches/Cargo.lock": "6004b29c6e793f18c7d5cce370a8d7d7bf0dd8aa0f20d0426dfad19d85b490f6",
+    "benches/Cargo.toml": "f4471fbf343e7ce53d3c8792fea733b60b038c284555d728974b7fa87b63a909",
+    "Cargo.toml": "f9f7c315ee657219c8ecdf84b7ba62bf19260d1906275dcf2efe19217a211a46",
+    "benches/run.py": "8aa450afbd798fd4162378d42ec925395613d11babccebbe11e312abacdbe9a8",
+    "benches/summarize.py": "c91294619feab53bd02cd0517ccc77777254154771bab51e50cf784de1194589"
+  },
+  "command": [
+    "cargo",
+    "run",
+    "--release",
+    "--locked",
+    "--manifest-path",
+    "benches/Cargo.toml",
+    "--bin",
+    "compare"
+  ],
+  "exit_code": 0,
+  "finished_utc": "2026-09-21T13:03:56.877515+00:00"
+}

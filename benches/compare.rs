@@ -99,14 +99,7 @@ fn run<K: Key, S: BuildHasher + Clone>(
 ) {
     for &capacity in &cfg.capacities {
         let keys: Vec<K> = (0..capacity * 2).map(|i| K::make(i, width)).collect();
-        let indices: Vec<usize> = (0..8192u64)
-            .map(|i| {
-                let mut x = i.wrapping_add(0x9e3779b97f4a7c15);
-                x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-                x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
-                ((x ^ (x >> 31)) as usize) % capacity
-            })
-            .collect();
+        let indices = workload_indices(capacity);
         for &case in CASES {
             if !cfg.filter.is_empty() && !case.contains(&cfg.filter) {
                 continue;
@@ -152,16 +145,14 @@ fn timed(mut batch: impl FnMut(), operations: usize, duration: Duration) -> f64 
     }
 }
 
-#[inline]
-fn mixed_batch<K: Key, S: BuildHasher, C: Cache<K, S>>(c: &mut C, keys: &[K], indices: &[usize]) {
-    let capacity = keys.len() / 2;
-    for (op, &i) in indices.iter().enumerate() {
-        if op % 20 == 0 {
-            c.insert(black_box(&keys[capacity + i]).clone(), 7);
-        } else {
-            black_box(c.get(black_box(&keys[i])));
-        }
+#[inline(never)]
+fn timed_fixed(mut batch: impl FnMut(), operations: usize) -> f64 {
+    batch();
+    let start = Instant::now();
+    for _ in 0..256 {
+        batch();
     }
+    start.elapsed().as_secs_f64() * 1e9 / (256.0 * operations as f64)
 }
 
 fn bench<K: Key, S: BuildHasher, C: Cache<K, S>>(
@@ -247,10 +238,9 @@ fn bench<K: Key, S: BuildHasher, C: Cache<K, S>>(
             keys.len(),
             duration,
         ),
-        "mixed-95" => timed(
+        "mixed-95" => timed_fixed(
             || mixed_batch::<K, S, C>(&mut c, keys, indices),
             indices.len(),
-            duration,
         ),
         "load-hit" => timed(
             || {

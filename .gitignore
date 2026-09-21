@@ -3,6 +3,7 @@
 .DS_Store
 /target/
 /benches/target/
+__pycache__/
 /Cargo.lock
 node_modules/
 tsconfig.json

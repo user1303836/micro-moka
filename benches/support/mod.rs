@@ -2,6 +2,7 @@
 
 use std::borrow::Borrow;
 use std::hash::{BuildHasher, Hash};
+use std::hint::black_box;
 use std::num::NonZeroUsize;
 
 pub trait Key: Eq + Hash + Clone + Borrow<Self::Query> {
@@ -34,6 +35,33 @@ pub trait Cache<K: Key, S: BuildHasher>: Sized {
     fn sum(&self) -> u64;
     fn sum_for(&self) -> u64;
     fn count(&self) -> usize;
+}
+
+pub fn workload_indices(capacity: usize) -> Vec<usize> {
+    (0..8192u64)
+        .map(|i| {
+            let mut x = i.wrapping_add(0x9e3779b97f4a7c15);
+            x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+            ((x ^ (x >> 31)) as usize) % capacity
+        })
+        .collect()
+}
+
+#[inline]
+pub fn mixed_batch<K: Key, S: BuildHasher, C: Cache<K, S>>(
+    c: &mut C,
+    keys: &[K],
+    indices: &[usize],
+) {
+    let capacity = keys.len() / 2;
+    for (op, &i) in indices.iter().enumerate() {
+        if op % 20 == 0 {
+            c.insert(black_box(&keys[capacity + i]).clone(), 7);
+        } else {
+            black_box(c.get(black_box(&keys[i])));
+        }
+    }
 }
 
 pub struct Current<K, S>(micro_moka::unsync::Cache<K, u64, S>);
@@ -252,6 +280,29 @@ mod tests {
         assert_eq!(c.sum(), 0);
         c.insert("again".into(), 99);
         assert_eq!(c.load(&"again".into()), 99);
+    }
+
+    #[test]
+    fn mixed_trace_matches_the_published_baseline_at_equal_work() {
+        let capacity = 128;
+        let keys: Vec<_> = (0..capacity as u64 * 2).collect();
+        let indices = workload_indices(capacity);
+        let hasher = RandomState::new();
+        let mut current: Current<u64, _> = Cache::new(capacity, hasher.clone());
+        let mut baseline: Baseline<u64, _> = Cache::new(capacity, hasher);
+        for &key in &keys[..capacity] {
+            current.insert(key, key);
+            baseline.insert(key, key);
+        }
+        for _ in 0..72 {
+            mixed_batch::<u64, RandomState, _>(&mut current, &keys, &indices);
+            mixed_batch::<u64, RandomState, _>(&mut baseline, &keys, &indices);
+            let mut actual: Vec<_> = current.0.iter().map(|(&k, &v)| (k, v)).collect();
+            let mut expected: Vec<_> = baseline.0.iter().map(|(&k, &v)| (k, v)).collect();
+            actual.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]

@@ -89,3 +89,9 @@ python3 benches/ablate.py independent --variants 100,010,001,111
 ### Benchmark hardening after the factorial run
 
 The mixed case means **95% lookups**, not a guaranteed 95% hit rate. Its resident set changes during initial churn, so final reruns add 64 unmeasured batches before timing rather than comparing short transient phases. Iteration setups now validate both their expected count and checksums before timing. These changes apply equally to every library. `run.py` also saves tracked source diffs for uncommitted experiments, and the new CI evidence job compares all libraries on x86-64 Linux. CI-host timings are paired exploratory evidence, not controlled hardware-performance guarantees.
+
+### Equal-work correction for the evolving mixed trace
+
+The second factorial run (`steady-factorial-*`) and two combined repeats (`combined-final`, `combined-repeat`) retained large mixed-case fluctuations despite 64 warm-up batches: one unchanged mixed path differed by 46% in a repeat. Warm-up alone does not guarantee a stationary resident set for this read-without-refill trace. An adaptive time window lets faster implementations process different trace prefixes, so these mixed-case rows do **not** establish like-for-like throughput regressions.
+
+The corrected harness measures exactly **256 batches of 8,192 operations** for the mixed case, after the same warm-up/pilot work for every library. Other cases retain adaptive timing. The new test compares candidate and published-baseline resident contents after each equal-length mixed batch. In the initial corrected diagnostic (`mixed-fixed-operations`), all 18 mixed-case comparisons are within 5% of baseline. Earlier raw results are retained rather than silently replaced; final headline results use the corrected harness.
