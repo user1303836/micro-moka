@@ -1,0 +1,11 @@
+library,operation,allocations,bytes_allocated
+micro,load-hit,0,0
+micro,clear,2,59400
+baseline,load-hit,10000,240000
+baseline,clear,2,59400
+quick_cache,load-hit,0,0
+quick_cache,clear,0,0
+lru,load-hit,0,0
+lru,clear,0,0
+hashlink,load-hit,0,0
+hashlink,clear,0,0

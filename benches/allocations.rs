@@ -35,7 +35,9 @@ fn check<C: Cache<String, RandomState>>() {
         clear.allocations,
         clear.bytes_allocated
     );
-    // Current assertions become allocation regression gates with the implementation commits.
+    if C::NAME == "micro" {
+        assert_eq!(hits.allocations, 0);
+    }
     if C::NAME == "baseline" {
         assert_eq!(hits.allocations, 10000);
         assert_eq!(clear.allocations, 2);

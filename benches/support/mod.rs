@@ -42,7 +42,7 @@ pub struct Lru<K, S>(lru::LruCache<K, u64, S>);
 pub struct Hashlink<K, S>(hashlink::LruCache<K, u64, S>);
 
 macro_rules! micro_adapter {
-    ($wrapper:ident, $module:ident, $name:literal) => {
+    ($wrapper:ident, $module:ident, $name:literal, $load:path) => {
         impl<K: Key, S: BuildHasher> Cache<K, S> for $wrapper<K, S> {
             const NAME: &'static str = $name;
             fn new(capacity: usize, hasher: S) -> Self {
@@ -60,7 +60,7 @@ macro_rules! micro_adapter {
                 self.0.insert(key, value);
             }
             fn load(&mut self, key: &K) -> u64 {
-                *self.0.get_or_insert_with(key.clone(), || 7)
+                $load(&mut self.0, key)
             }
             fn remove(&mut self, key: &K) {
                 self.0.remove::<K::Query>(key.borrow());
@@ -77,8 +77,24 @@ macro_rules! micro_adapter {
         }
     };
 }
-micro_adapter!(Current, micro_moka, "micro");
-micro_adapter!(Baseline, baseline, "baseline");
+#[inline]
+fn load_current<K: Key, S: BuildHasher>(
+    cache: &mut micro_moka::unsync::Cache<K, u64, S>,
+    key: &K,
+) -> u64 {
+    *cache.get_or_insert_with_ref::<K::Query, _>(key.borrow(), || 7)
+}
+
+#[inline]
+fn load_baseline<K: Key, S: BuildHasher>(
+    cache: &mut baseline::unsync::Cache<K, u64, S>,
+    key: &K,
+) -> u64 {
+    *cache.get_or_insert_with(key.clone(), || 7)
+}
+
+micro_adapter!(Current, micro_moka, "micro", load_current);
+micro_adapter!(Baseline, baseline, "baseline", load_baseline);
 
 impl<K: Key, S: BuildHasher> Cache<K, S> for Quick<K, S> {
     const NAME: &'static str = "quick_cache";

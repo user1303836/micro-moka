@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Documented the benchmark-first optimization plan and comparison criteria.
+- Added `Cache::get_or_insert_with_ref` to load using borrowed keys without constructing owned keys on hits.
+- Added matched-hasher comparisons with released Micro Moka, quick_cache, lru, and hashlink across key sizes, capacities, loading, clearing, and iteration, plus allocation regression probes.
+- Added borrowed-loader panic, visitation, hash-count, clone-count, and unsized-key regression tests.
+
+### Changed
+
+- Refreshed the isolated benchmark dependency lockfile and audit both dependency graphs with warnings denied.
 
 ## [1.2.0] - 2026-07-20
 
