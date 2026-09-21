@@ -557,28 +557,15 @@ where
         }
     }
 
-    /// Discards all cached values.
-    #[cold]
-    #[inline(never)]
+    /// Discards all cached values, retaining allocated storage for reuse.
+    ///
+    /// If a key or value destructor panics, the cache is left empty and usable,
+    /// but the slab allocation may be released during unwinding.
+    #[inline]
     pub fn invalidate_all(&mut self) {
-        let old_capacity = self.table.capacity();
-        let old_slab_capacity = self.slab.entries.capacity();
-        let old_table = std::mem::replace(&mut self.table, HashTable::new());
-        let old_slab = std::mem::replace(&mut self.slab, Slab::new());
-        self.deque.clear();
-        self.entry_count = 0;
-
-        drop(old_table);
-        drop(old_slab);
-
-        self.table.reserve(old_capacity, |&idx| {
-            // This closure is for rehashing during reserve. Since the table is
-            // empty after the swap, this will never be called, but we must
-            // provide it.
-            let _ = idx;
-            0
-        });
-        self.slab.entries.reserve(old_slab_capacity);
+        if self.entry_count != 0 {
+            self.clear_entries();
+        }
     }
 
     /// Discards cached values that satisfy a predicate.
@@ -643,6 +630,21 @@ where
         self.deque.push_back(&mut self.slab, idx);
         self.entry_count += 1;
         idx
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn clear_entries(&mut self) {
+        self.table.clear();
+        let mut old_slab = std::mem::replace(&mut self.slab, Slab::new());
+        self.deque.clear();
+        self.entry_count = 0;
+
+        // Detach residents before invoking user destructors so unwinding leaves
+        // no table or deque index pointing into partially cleared storage.
+        old_slab.entries.clear();
+        old_slab.free_list.clear();
+        self.slab = old_slab;
     }
 
     #[cold]
@@ -1132,6 +1134,83 @@ mod tests {
         assert_eq!(cache.table.len(), 1);
         assert_eq!(cache.slab.iter().count(), 1);
         assert!(cache.contains_key(&"safe"));
+    }
+
+    #[test]
+    fn invalidate_all_reuses_slab_and_free_list_buffers() {
+        let mut cache = Cache::builder()
+            .max_capacity(32)
+            .initial_capacity(32)
+            .build();
+        for key in 0..32 {
+            cache.insert(key, key);
+        }
+        for key in (0..32).step_by(2) {
+            cache.remove(&key);
+        }
+        let entries_ptr = cache.slab.entries.as_ptr();
+        let free_ptr = cache.slab.free_list.as_ptr();
+        let free_capacity = cache.slab.free_list.capacity();
+        for _ in 0..3 {
+            cache.invalidate_all();
+            assert_eq!(cache.slab.entries.as_ptr(), entries_ptr);
+            assert_eq!(cache.slab.free_list.as_ptr(), free_ptr);
+            assert_eq!(cache.slab.free_list.capacity(), free_capacity);
+            assert!(cache.slab.entries.is_empty());
+            assert!(cache.slab.free_list.is_empty());
+            assert_eq!(cache.entry_count(), 0);
+            assert_eq!(cache.table.len(), 0);
+            assert_eq!(cache.iter().next(), None);
+            for key in 0..32 {
+                cache.insert(key, key);
+            }
+            assert_eq!(cache.entry_count(), 32);
+            for key in 0..32 {
+                assert_eq!(cache.peek(&key), Some(&key));
+            }
+        }
+    }
+
+    #[test]
+    fn clearing_an_empty_cache_with_vacant_slots_allows_refill() {
+        let mut cache = Cache::new(4);
+        for key in 0..4 {
+            cache.insert(key, key);
+        }
+        for key in 0..4 {
+            cache.remove(&key);
+        }
+        cache.invalidate_all();
+        cache.invalidate_all();
+        assert_eq!(cache.iter().next(), None);
+        for key in 4..8 {
+            cache.insert(key, key);
+        }
+        cache.insert(8, 8);
+        assert_eq!(cache.entry_count(), 4);
+        assert_eq!(cache.peek(&4), None);
+        assert_eq!(cache.peek(&8), Some(&8));
+    }
+
+    #[test]
+    fn invalidate_all_key_drop_panic_leaves_cache_usable() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        #[derive(Debug, Hash, PartialEq, Eq)]
+        struct Key(bool);
+        impl Drop for Key {
+            fn drop(&mut self) {
+                assert!(!self.0, "key drop");
+            }
+        }
+        let mut cache = Cache::new(2);
+        cache.insert(Key(true), 1);
+        cache.insert(Key(false), 2);
+        assert!(catch_unwind(AssertUnwindSafe(|| cache.invalidate_all())).is_err());
+        assert_eq!(cache.entry_count(), 0);
+        assert_eq!(cache.table.len(), 0);
+        assert_eq!(cache.iter().next(), None);
+        cache.insert(Key(false), 3);
+        assert_eq!(cache.get(&Key(false)), Some(&3));
     }
 
     #[test]

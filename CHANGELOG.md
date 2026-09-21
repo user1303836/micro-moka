@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Refreshed the isolated benchmark dependency lockfile and audit both dependency graphs with warnings denied.
+- Reused hash table, slab, and free-list allocations across `invalidate_all`, with a cheap empty-cache path and panic-safe cleanup.
 
 ## [1.2.0] - 2026-07-20
 

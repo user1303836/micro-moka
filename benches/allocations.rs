@@ -37,6 +37,8 @@ fn check<C: Cache<String, RandomState>>() {
     );
     if C::NAME == "micro" {
         assert_eq!(hits.allocations, 0);
+        assert_eq!(clear.allocations, 0);
+        assert_eq!(clear.deallocations, keys.len());
     }
     if C::NAME == "baseline" {
         assert_eq!(hits.allocations, 10000);
