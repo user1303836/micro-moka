@@ -1,5 +1,7 @@
 # Benchmark-led optimizations
 
+**Final selected-code results:** [benchmark-results.md](benchmark-results.md). This notebook retains historical experiments, including rejected implementations; older headline tables are not the final result.
+
 This work targets broader measured wins against common single-threaded Rust caches without changing SIEVE semantics, HashDoS-resistant defaults, Rust 1.76 support, or the safe-Rust production dependency footprint.
 
 ## Retained implementation
@@ -88,8 +90,8 @@ On the **original 252-case subset**, fastest-peer wins increase from 42 to 86 (1
 All raw samples, replay identities, per-variant source hashes and test logs are in `benches/results/factorial-*`. Reproduce with:
 
 ```sh
-python3 benches/ablate.py unique-factorial-name --harness-ref bade8b4
-# Omit --harness-ref to use the current, hardened harness.
+python3 benches/ablate.py historical-factorial --harness-ref bade8b4 --iterator-ref bade8b4
+# Omit both overrides for the retained implementation and corrected harness.
 # Bits are borrowed, clear, iterator; runs refuse to overwrite prior evidence.
 python3 benches/ablate.py independent --variants 100,010,001,111
 ```

@@ -17,7 +17,7 @@ BASE = "4a3888649e89a0216586a36fadcdb9dc76a6efa0"
 PATCHES = [
     ("borrowed", "86d88c9", "be8e2de"),
     ("clear", "be8e2de", "78f03bb"),
-    ("iterator", "78f03bb", "bade8b4"),
+    ("iterator", "78f03bb", "f628e43"),
 ]
 
 
@@ -30,6 +30,7 @@ def main():
     parser.add_argument("name")
     parser.add_argument("--variants", default="000,100,010,001,110,101,011,111")
     parser.add_argument("--harness-ref", help="use benchmark sources from a Git revision instead of the working tree")
+    parser.add_argument("--iterator-ref", help="replay a historical iterator checkpoint instead of the retained implementation")
     args = parser.parse_args()
     if not args.name.replace("-", "").replace("_", "").isalnum():
         parser.error("name must be alphanumeric, with optional dashes/underscores")
@@ -45,8 +46,10 @@ def main():
     environment.setdefault("MM_SAMPLES", "5")
     environment.setdefault("MM_MILLIS", "3")
     environment["CARGO_TARGET_DIR"] = str(ROOT / "target/ablation-build")
+    refs = [(name, before, args.iterator_ref if name == "iterator" and args.iterator_ref else after)
+            for name, before, after in PATCHES]
     patches = [(name, git("rev-parse", before).decode().strip(), git("rev-parse", after).decode().strip(),
-                git("diff", before, after, "--", "src")) for name, before, after in PATCHES]
+                git("diff", before, after, "--", "src")) for name, before, after in refs]
     source_files = git("ls-tree", "-r", "--name-only", BASE, "src").decode().splitlines()
     for bits in variants:
         name = f"{args.name}-{bits}"

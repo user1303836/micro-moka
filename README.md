@@ -202,6 +202,10 @@ cargo +nightly miri test --lib --all-features
 cargo run --release --locked --manifest-path benches/Cargo.toml
 ```
 
+The [paired comparison report](docs/benchmark-results.md) covers borrowed loading,
+clearing, and iteration across matched hashers and capacities, including regressions
+and rejected experiments. Run the current comparison with `python3 benches/run.py my-run`.
+
 ## Releases
 
 Merges to `main` are released automatically. See [RELEASING.md](./RELEASING.md).
